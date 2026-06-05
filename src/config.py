@@ -25,12 +25,17 @@ APP_FRAME_WIDTH = 640
 APP_FRAME_HEIGHT = 480
 APP_TIMER_INTERVAL_MS = 33  # For ~30 FPS
 
-APP_HIBERNATE_INTERVAL_MS = 5000  # Check for wake-up every 1 second
+APP_HIBERNATE_INTERVAL_MS = 5000  # Check for wake-up every 5 seconds
 APP_BLACK_FRAME_THRESHOLD = 5.0  # Avg pixel value below which frame is considered black
+# Axon USB camera is on /dev/video1; index 0 often times out
+APP_CAMERA_INDICES = [1, 0, 2]
 
+# --- InspireFace ------------------------------------------------------------
+INSPIREFACE_MODEL_NAME = "Pikachu"
+# Pikachu modelpack default; matches official sample threshold
+SIMILARITY_THRESHOLD = 0.48
+# Gundam_RK3588 targets NPU but currently segfaults on Axon — do not use yet
+# INSPIREFACE_MODEL_NAME = "Gundam_RK3588"
 
-MODEL_PACK_PATH = "assets/models/Pikachu"
-# Use the same DB for InspireFace FeatureHub persistence
+# FeatureHub persists embeddings in the same SQLite file as attendance metadata
 DATABASE_PATH = DB_PATH
-ID_NAME_MAP_PATH = str(DATA_DIR / "id_name_map.json")
-SIMILARITY_THRESHOLD = 0.6

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.camera import open_camera
 from src.config import APP_FRAME_HEIGHT, APP_FRAME_WIDTH
 from src.core.face_recognizer import FaceRecognizer
 from src.ipc import (
@@ -124,19 +125,10 @@ class BasicApp(QMainWindow):
 
     def setup_camera_pipeline(self):
         """Open camera via OpenCV and start processing frames with the recognizer."""
-        # Find a working camera index
-        for idx in range(3):
-            cap = cv2.VideoCapture(idx)
-            if cap.isOpened() and cap.read()[0]:
-                # Request configured resolution @ ~30fps
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, APP_FRAME_WIDTH)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, APP_FRAME_HEIGHT)
-                cap.set(cv2.CAP_PROP_FPS, 30)
-                self.cap = cap
-                break
-            cap.release()
-        if not self.cap:
-            self.messages_display.append("Error: Could not open camera")
+        try:
+            self.cap = open_camera()
+        except RuntimeError as exc:
+            self.messages_display.append(f"Error: {exc}")
             return
 
         # Initialize recognizer
