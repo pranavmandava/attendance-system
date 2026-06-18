@@ -24,13 +24,42 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import cv2
+import os
+from urllib.parse import urlparse
 
-from src.api.people import _download_image_if_needed
-from src.config import DATA_DIR
+import cv2
+import requests as req
+
+from src.config import DATA_DIR, ENROLLMENT_IMAGES_DIR
 from src.core.face_recognizer import FaceRecognizer
 from src.schema import FaceIdentityMap, Person, db, ensure_db_schema
 from src.utils import ist_timestamp
+
+
+def _download_image_if_needed(picture_url: str) -> tuple[str, bool]:
+    """Ensure the image is downloaded locally; return (local_path, downloaded_now)."""
+    parsed_url = urlparse(picture_url)
+    filename = os.path.basename(parsed_url.path)
+    if not filename.lower().endswith(".jpg"):
+        raise ValueError("Only .jpg images are supported")
+
+    local_path = os.path.join(ENROLLMENT_IMAGES_DIR, filename)
+
+    if os.path.exists(local_path):
+        return local_path, False
+
+    response = req.get(picture_url, timeout=15)
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to download image (status={response.status_code})")
+
+    content_type = response.headers.get("Content-Type", "")
+    if "image/jpeg" not in content_type.lower():
+        raise ValueError("URL does not point to a JPEG image")
+
+    with open(local_path, "wb") as f:
+        f.write(response.content)
+
+    return local_path, True
 
 
 def _parse_args() -> argparse.Namespace:

@@ -5,7 +5,7 @@ import cv2
 import inspireface as isf
 
 from src.config import INSPIREFACE_MODEL_NAME
-from src.core.enrollment import enroll_from_image
+from src.core.enrollment import CaptureStatus, EnrollmentCapture, enroll_from_image
 from src.core.inspireface_engine import create_session, model_dir
 from src.ipc import send_message
 from src.logger import get_core_ui_logger
@@ -21,6 +21,7 @@ class FaceRecognizer:
         self.current_session_id: Optional[str] = None
         self._attendance_marked_by_session: Dict[str, Set[str]] = {}
         self.on_first_attendance: Optional[Callable[[str], None]] = None
+        self._enrollment: Optional[EnrollmentCapture] = None
 
         try:
             self.logger.info("FaceRecognizer initialisation started")
@@ -201,3 +202,90 @@ class FaceRecognizer:
     def add_face(self, frame, person_id: Optional[str] = None):
         """Enroll the largest face in frame; returns (hub_id, feature) or None."""
         return enroll_from_image(self.session, frame, person_id)
+
+    # --- Capture-based enrollment ----------------------------------------------
+
+    @property
+    def is_enrolling(self) -> bool:
+        return self._enrollment is not None
+
+    @property
+    def is_enrollment_armed(self) -> bool:
+        return self._enrollment is not None and self._enrollment.is_armed
+
+    @property
+    def is_enrollment_capturing(self) -> bool:
+        return self._enrollment is not None and self._enrollment.is_capturing
+
+    def arm_enrollment(self, person: dict) -> None:
+        """Enter enrollment mode: show preview and wait for capture trigger."""
+        self.logger.info("Enrollment armed for %s", person.get("personId"))
+        self._enrollment = EnrollmentCapture(self.session, person)
+        self._enrollment.arm()
+
+    def start_enrollment_capture(self) -> None:
+        """Begin collecting face samples (triggered from PWA)."""
+        if not self._enrollment:
+            raise RuntimeError("Enrollment is not armed")
+        self.logger.info(
+            "Enrollment capture started for %s", self._enrollment.person.get("personId")
+        )
+        self._enrollment.start_capture()
+
+    def begin_enrollment(self, person: dict) -> None:
+        """Legacy: arm and immediately start capture."""
+        self.arm_enrollment(person)
+        self.start_enrollment_capture()
+
+    def cancel_enrollment(self) -> None:
+        if self._enrollment:
+            self._enrollment.disarm()
+        self._enrollment = None
+
+    def process_enrollment_frame(self, frame) -> Tuple[object, CaptureStatus]:
+        """Run one frame through enrollment preview or capture."""
+        status = self._enrollment.process_frame(frame)
+
+        if status.face_location:
+            x1, y1, x2, y2 = status.face_location
+            if status.capturing:
+                color = (0, 200, 0) if not status.failed else (0, 0, 255)
+            else:
+                color = (255, 200, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+        name = self._enrollment.person.get("preferredName", "")
+        if status.capturing:
+            header = f"Capturing {name} [{status.accepted}/{status.required}]"
+        else:
+            header = f"Enrollment: {name}"
+
+        cv2.putText(
+            frame,
+            header,
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 160, 0),
+            2,
+        )
+        cv2.putText(
+            frame,
+            status.message,
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255) if status.failed else (0, 200, 0),
+            2,
+        )
+
+        if status.done or status.failed:
+            self.logger.info(
+                "Enrollment finished (done=%s failed=%s): %s",
+                status.done,
+                status.failed,
+                status.message,
+            )
+            self._enrollment = None
+
+        return frame, status

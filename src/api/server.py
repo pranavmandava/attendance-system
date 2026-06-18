@@ -1,17 +1,15 @@
-import os
 from datetime import datetime
 from os import uname
-from urllib.parse import urlparse
 
 import requests as req
 from flask import Flask, request
 from flask_cors import CORS
 from uuid_extension import uuid7
 
+from src.api.enroll import enroll_bp
+from src.api.enrollment_state import get_session, set_phase
 from src.api.people import people_bp
 from src.api.session import get_active_session_id, session_bp
-from src.config import ENROLLMENT_IMAGES_DIR
-from src.core.face_recognizer import FaceRecognizer
 from src.ipc import (
     add_message_handler,
     broadcast_message,
@@ -30,6 +28,8 @@ CORS(
                 "http://localhost:8787",
                 "https://api.korukondacoachingcentre.com",
                 "http://localhost:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001",
             ],
             "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
             "allow_headers": ["Content-Type"],
@@ -43,6 +43,7 @@ ensure_db_schema()
 # Register Blueprints
 app.register_blueprint(session_bp)
 app.register_blueprint(people_bp)
+app.register_blueprint(enroll_bp, url_prefix="/enroll")
 
 
 @app.before_request
@@ -71,112 +72,12 @@ def test():
     return {"uuid": uuid7()}
 
 
+# Legacy route kept for older clients — delegates to prepare-only flow.
 @app.route("/enroll", methods=["POST"])
-def enroll():
-    data = request.json
-    print(data)
-    syncedAt = ist_timestamp()
+def enroll_legacy_redirect():
+    from src.api.enroll import enroll_prepare
 
-    picture_url = data.get("picture")
-
-    # --- Validate and download the image --- #
-    if not picture_url:
-        return {"message": "pictureUrl missing from payload"}, 400
-
-    # Ensure the URL has a .jpg filename
-    parsed_url = urlparse(picture_url)
-    filename = os.path.basename(parsed_url.path)
-
-    if not filename.lower().endswith(".jpg"):
-        return {"message": "Only .jpg images are supported."}, 400
-
-    local_path = os.path.join(ENROLLMENT_IMAGES_DIR, filename)
-
-    # ------------------------------------------------------------
-    # Download the image if it is not already present locally.
-    # This avoids unnecessary network calls and file overwrites
-    # when the same image has already been cached on disk.
-    # ------------------------------------------------------------
-
-    downloaded_now = False  # Track whether we fetched the file in this request
-
-    if not os.path.exists(local_path):
-        try:
-            response = req.get(picture_url, timeout=15)
-            if response.status_code != 200:
-                return {
-                    "message": "Failed to download image",
-                    "status": response.status_code,
-                }, 502
-
-            # Basic content‐type validation (allows e.g. image/jpeg)
-            content_type = response.headers.get("Content-Type", "")
-            if "image/jpeg" not in content_type.lower():
-                return {"message": "URL does not point to a JPEG image"}, 400
-
-            # Write the image to disk
-            with open(local_path, "wb") as f:
-                f.write(response.content)
-
-            downloaded_now = True  # Mark that we downloaded the file
-
-        except Exception as e:
-            print(e)
-            return {"message": "Error downloading image", "error": str(e)}, 500
-    else:
-        # Reuse the cached image instead of downloading again
-        print(f"[Enroll] Reusing cached image {local_path}")
-
-    try:
-        if data["userType"] == "Cadet":
-            Person.insert(
-                uniqueId=data["personId"],
-                name=data["preferredName"],
-                admissionNumber=data["admissionNumber"],
-                roomId=data["roomId"],
-                pictureFileName=filename,
-                personType=data["userType"],
-                syncedAt=syncedAt,
-            ).on_conflict_replace().execute()
-        elif data["userType"] == "Employee":
-            print("\n\n using employee ")
-            Person.insert(
-                uniqueId=data["personId"],
-                name=data["preferredName"],
-                pictureFileName=filename,
-                personType=data["userType"],
-            ).on_conflict_replace().execute()
-
-    except Exception as e:
-        # Cleanup the saved image only if we downloaded it in this request
-        print(e)
-        if downloaded_now and os.path.exists(local_path):
-            try:
-                os.remove(local_path)
-            except OSError:
-                pass
-        return {"message": "Enrollment failed", "error": str(e)}, 500
-
-    try:
-        enroll_user(data["personId"], local_path)
-    except Exception as e:
-        print(e)
-        return {
-            "message": "Enrollment failed - Couldn't enroll to FAISS",
-            "error": str(e),
-        }, 500
-
-    # Notify UI clients about new enrollment
-    broadcast_message(
-        {
-            "type": "enrollment",
-            "status": "completed",
-            "name": data.get("preferredName"),
-            "personId": data.get("personId"),
-        }
-    )
-
-    return {"syncedAt": syncedAt}, 200
+    return enroll_prepare()
 
 
 @app.route("/ipc/send", methods=["POST"])
@@ -192,6 +93,15 @@ def ipc_send():
 
     broadcast_message(data)
     return {"status": "Message broadcasted", "payload": data}, 200
+
+
+@app.route("/rooms", methods=["GET"])
+def list_rooms():
+    rooms = [
+        {"roomId": room.roomId, "roomName": room.roomName}
+        for room in Room.select().order_by(Room.roomName.asc())
+    ]
+    return {"rooms": rooms}, 200
 
 
 @app.route("/setup-rooms", methods=["POST"])
@@ -367,6 +277,22 @@ def _handle_ipc_message(payload: dict):
         except Exception as exc:
             print(f"[Attendance] DB write error: {exc}")
 
+    elif message_type == "enrollment-result":
+        person_id = payload.get("personId")
+        status = payload.get("status")
+        message = payload.get("message")
+        if person_id:
+            if status == "completed":
+                set_phase(person_id, "completed", message or "Enrolled")
+            elif status == "failed":
+                set_phase(person_id, "failed", message or "Capture failed")
+        print(
+            f"[Enrollment] {status}: "
+            f"{payload.get('name')} ({person_id}) - "
+            f"{message}"
+        )
+        broadcast_message(payload)
+
     elif message_type == "user-action":
         # Handle user actions from UI
         action = payload.get("action")
@@ -385,29 +311,6 @@ def _handle_ipc_message(payload: dict):
 
 # Register the IPC message handler
 add_message_handler(_handle_ipc_message)
-
-
-def enroll_user(person_id: str, image_path: str):
-    """Enroll a user's face into the face recognition system."""
-    try:
-        # Initialize face recognizer
-        face_recognizer = FaceRecognizer()
-
-        # Load the image
-        import cv2
-
-        frame = cv2.imread(image_path)
-        if frame is None:
-            raise ValueError(f"Could not load image from {image_path}")
-
-        # Extract face features and add to FeatureHub; store mapping to person_id
-        face_recognizer.add_face(frame, person_id)
-
-        print(f"Successfully enrolled user {person_id}")
-
-    except Exception as e:
-        print(f"Failed to enroll user {person_id}: {e}")
-        raise
 
 
 if __name__ == "__main__":

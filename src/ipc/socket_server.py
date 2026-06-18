@@ -48,11 +48,14 @@ class SocketServer:
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
-    def broadcast(self, payload: Dict[str, Any]):
+    def broadcast(self, payload: Dict[str, Any]) -> int:
         """Broadcast a JSON payload to all connected UI clients.
 
         Args:
             payload: Dict to send (will be converted to JSON string)
+
+        Returns:
+            Number of clients the message was queued for.
         """
         if not isinstance(payload, dict):
             raise ValueError("Payload must be a dict")
@@ -61,6 +64,7 @@ class SocketServer:
         with self.clients_lock:
             for client in self.clients:
                 client.send_message(message)
+            return len(self.clients)
 
     def add_message_handler(self, handler: Callable):
         """Add a message handler to process incoming messages from UI.
@@ -188,14 +192,17 @@ def stop_socket_server():
         _socket_server = None
 
 
-def broadcast_message(payload: Dict[str, Any]):
+def broadcast_message(payload: Dict[str, Any]) -> int:
     """Broadcast a JSON payload to all connected UI clients.
 
     Args:
         payload: Dict to send (will be converted to JSON string)
+
+    Returns:
+        Number of clients the message was queued for.
     """
     server = get_socket_server()
-    server.broadcast(payload)
+    return server.broadcast(payload)
 
 
 def add_message_handler(handler: Callable):

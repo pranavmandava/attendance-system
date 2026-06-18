@@ -3,6 +3,7 @@
 All configuration variables should be defined here.
 """
 
+import sys
 from pathlib import Path
 
 # --- Project paths ---------------------------------------------------------
@@ -19,6 +20,16 @@ DB_PATH = str(DATA_DIR / "attendance.db")
 ENROLLMENT_IMAGES_DIR = DATA_DIR / "enrollment_images"
 ENROLLMENT_IMAGES_DIR.mkdir(exist_ok=True)
 
+# --- Capture-based enrollment ------------------------------------------------
+# Enrollment happens at the kiosk camera (same lighting/position as recognition).
+ENROLL_SAMPLES_REQUIRED = 5  # quality-gated samples averaged into one embedding
+ENROLL_MIN_FACE_WIDTH = 140  # px at 640x480; forces the subject close enough
+ENROLL_CENTER_TOLERANCE = 0.25  # face center within +/-25% of frame center
+ENROLL_MIN_SHARPNESS = 60.0  # Laplacian variance on the face crop (blur gate)
+ENROLL_MIN_SELF_SIMILARITY = 0.55  # each sample must agree with the running mean
+ENROLL_MIN_SAMPLE_GAP_SECONDS = 0.4  # spread samples over time for pose variety
+ENROLL_TIMEOUT_SECONDS = 5.0  # abort if samples can't be collected in time
+
 # --- GUI Application (PySide6) ---------------------------------------------
 APP_ENROL_FRAMES = 20
 APP_FRAME_WIDTH = 640
@@ -27,8 +38,13 @@ APP_TIMER_INTERVAL_MS = 33  # For ~30 FPS
 
 APP_HIBERNATE_INTERVAL_MS = 5000  # Check for wake-up every 5 seconds
 APP_BLACK_FRAME_THRESHOLD = 5.0  # Avg pixel value below which frame is considered black
-# Axon USB camera is on /dev/video1; index 0 often times out
-APP_CAMERA_INDICES = [1, 0, 2]
+# Axon USB camera is on /dev/video1; index 0 often times out.
+# On macOS (dev machine) the built-in camera is index 0 - index 1 can be a
+# Continuity/virtual camera that opens but delivers blank frames.
+if sys.platform == "darwin":
+    APP_CAMERA_INDICES = [0]
+else:
+    APP_CAMERA_INDICES = [1, 0, 2]
 
 # --- InspireFace ------------------------------------------------------------
 INSPIREFACE_MODEL_NAME = "Pikachu"
