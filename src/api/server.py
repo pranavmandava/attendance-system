@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from os import uname
 
@@ -6,6 +7,7 @@ from flask import Flask, request
 from flask_cors import CORS
 from uuid_extension import uuid7
 
+from src.api.connectivity import connectivity_bp
 from src.api.enroll import enroll_bp
 from src.api.enrollment_state import get_session, set_phase
 from src.api.people import people_bp
@@ -20,17 +22,24 @@ from src.schema import CadetAttendance, Person, Room, db, ensure_db_schema
 from src.utils import ist_timestamp, string_to_timestamp
 
 app = Flask(__name__)
+_default_cors_origins = [
+    "http://localhost:8787",
+    "https://api.korukondacoachingcentre.com",
+    "https://korukondacoachingcentre.com",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+_extra_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("AXON_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
 CORS(
     app,
     resources={
         r"/*": {
-            "origins": [
-                "http://localhost:8787",
-                "https://api.korukondacoachingcentre.com",
-                "http://localhost:3000",
-                "http://localhost:3001",
-                "http://127.0.0.1:3001",
-            ],
+            "origins": _default_cors_origins + _extra_cors_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
             "allow_headers": ["Content-Type"],
         }
@@ -44,6 +53,7 @@ ensure_db_schema()
 app.register_blueprint(session_bp)
 app.register_blueprint(people_bp)
 app.register_blueprint(enroll_bp, url_prefix="/enroll")
+app.register_blueprint(connectivity_bp)
 
 
 @app.before_request
