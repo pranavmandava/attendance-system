@@ -1,0 +1,16 @@
+# HTTPS in front of Flask for iPhone / production PWA testing.
+# Flask: http://127.0.0.1:1337  →  Caddy: https://192.168.4.26:8443
+
+{
+	local_certs
+}
+
+https://192.168.4.26:8443 {
+	reverse_proxy 127.0.0.1:1337
+	tls internal
+}
+
+https://localhost:8443 {
+	reverse_proxy 127.0.0.1:1337
+	tls internal
+}

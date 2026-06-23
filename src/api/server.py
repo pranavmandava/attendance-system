@@ -26,6 +26,7 @@ _default_cors_origins = [
     "http://localhost:8787",
     "https://api.korukondacoachingcentre.com",
     "https://korukondacoachingcentre.com",
+    "https://app.korukondacoachingcentre.com",
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
@@ -35,13 +36,18 @@ _extra_cors_origins = [
     for origin in os.environ.get("AXON_CORS_ORIGINS", "").split(",")
     if origin.strip()
 ]
+_cors_origins = _default_cors_origins + _extra_cors_origins
 CORS(
     app,
     resources={
         r"/*": {
-            "origins": _default_cors_origins + _extra_cors_origins,
+            "allow_private_network": True,
+            "origins": _cors_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
-            "allow_headers": ["Content-Type"],
+            "allow_headers": [
+                "Content-Type",
+                "Access-Control-Request-Private-Network",
+            ],
         }
     },
 )

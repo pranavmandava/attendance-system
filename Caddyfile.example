@@ -1,0 +1,25 @@
+# HTTPS reverse proxy for the Axon Flask API (required for the production HTTPS PWA).
+#
+# Flask stays on http://127.0.0.1:1337
+# Caddy serves https://<your-lan-ip>:8443
+#
+# Setup:
+#   brew install caddy
+#   ./scripts/caddy-https.sh
+#
+# iPhone URL: https://192.168.4.26:8443
+# Railway:    VITE_AXON_API_URL=https://192.168.4.26:8443
+
+{
+	local_certs
+}
+
+https://192.168.4.26:8443 {
+	reverse_proxy 127.0.0.1:1337
+	tls internal
+}
+
+https://localhost:8443 {
+	reverse_proxy 127.0.0.1:1337
+	tls internal
+}
