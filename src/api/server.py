@@ -27,6 +27,7 @@ from src.ipc import (
     start_socket_server,
     stop_socket_server,
 )
+from src.config import AXON_DEBUG, AXON_HOST, AXON_PORT
 from src.schema import CadetAttendance, Person, Room, db, ensure_db_schema
 from src.utils import ist_timestamp, string_to_timestamp
 
@@ -50,12 +51,10 @@ CORS(
     app,
     resources={
         r"/*": {
-            "allow_private_network": True,
             "origins": _cors_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
             "allow_headers": [
                 "Content-Type",
-                "Access-Control-Request-Private-Network",
             ],
         }
     },
@@ -336,7 +335,7 @@ if __name__ == "__main__":
     start_command_stream()
 
     try:
-        app.run(debug=True, host="0.0.0.0", port=1337)
+        app.run(debug=AXON_DEBUG, host=AXON_HOST, port=AXON_PORT)
     finally:
         stop_command_stream()
         stop_sync_sweeper()
