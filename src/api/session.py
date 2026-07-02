@@ -1,7 +1,7 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 
 from src.schema import Session, db
-from src.utils import ist_timestamp, python_string_to_timestamp, string_to_timestamp
+from src.utils import python_string_to_timestamp
 
 # Create a Blueprint for session routes
 session_bp = Blueprint("session", __name__, url_prefix="/session")
@@ -64,37 +64,6 @@ def get_sessions():
         return jsonify({"sessions": session_list}), 200
     except Exception as e:
         return jsonify({"error": "Failed to fetch sessions", "details": str(e)}), 500
-
-
-@session_bp.route("/update", methods=["POST"])
-def update_session():
-    """Update the session."""
-    data = request.get_json()
-    print(data)
-
-    return jsonify({"message": "Session updated"}), 200
-
-
-@session_bp.route("/create", methods=["POST"])
-def create_session():
-    data = request.get_json()
-    synced_at = ist_timestamp()
-
-    Session.create(
-        id=data["id"],
-        name=data["name"],
-        plannedDurationInMinutes=int(data["plannedDurationInMinutes"]),
-        plannedEndTimestamp=string_to_timestamp(data["plannedEndTimestamp"]),
-        startTimestamp=string_to_timestamp(data["startTimestamp"]),
-        actualEndTimestamp=string_to_timestamp(data["actualEndTimestamp"]),
-        syncedAt=synced_at,
-    ).save()
-
-    Session.update(actualEndTimestamp=ist_timestamp()).where(
-        Session.id != data["id"], Session.actualEndTimestamp.is_null()
-    ).execute()
-
-    return jsonify({"syncedAt": synced_at}), 200
 
 
 @session_bp.route("/current", methods=["GET"])

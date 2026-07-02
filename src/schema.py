@@ -2,7 +2,19 @@ from peewee import CharField, DateTimeField, IntegerField, Model, SqliteDatabase
 
 from src.config import DB_PATH
 
-db = SqliteDatabase(DB_PATH)
+# WAL lets the Flask API, sync sweeper, command stream, and the UI process
+# read/write concurrently; busy_timeout retries instead of raising
+# "database is locked" when writes do collide.
+db = SqliteDatabase(
+    DB_PATH,
+    pragmas={
+        "journal_mode": "wal",
+        "busy_timeout": 5000,
+        "synchronous": "normal",
+    },
+)
+
+PERMANENT_FAILURE = "PERMANENT_FAILURE"
 
 
 class Person(Model):
@@ -12,7 +24,8 @@ class Person(Model):
     roomId = CharField(null=True)
     pictureFileName = CharField(null=False)
     personType = CharField(null=False)  # Cadet, Employee
-    syncedAt = DateTimeField(null=True)
+    syncedAt = CharField(null=True)
+    error = CharField(null=True)
 
     class Meta:
         database = db
@@ -31,7 +44,8 @@ class CadetAttendance(Model):
     personId = CharField()
     attendanceTimeStamp = DateTimeField()
     sessionId = CharField()
-    syncedAt = DateTimeField()
+    syncedAt = CharField(null=True)
+    error = CharField(null=True)
 
     class Meta:
         database = db
@@ -64,12 +78,37 @@ class FaceIdentityMap(Model):
         database = db
 
 
+class SyncCursor(Model):
+    """Key/value store for sync state (e.g. last SSE event id)."""
+
+    key = CharField(primary_key=True)
+    value = CharField(null=True)
+
+    class Meta:
+        database = db
+
+
+def _migrate_schema() -> None:
+    """Add columns/tables introduced after initial deploy."""
+    tables = db.get_tables()
+    if "cadetattendance" in tables:
+        cols = {row[1] for row in db.execute_sql("PRAGMA table_info(cadetattendance)")}
+        if "error" not in cols:
+            db.execute_sql("ALTER TABLE cadetattendance ADD COLUMN error TEXT")
+    if "person" in tables:
+        cols = {row[1] for row in db.execute_sql("PRAGMA table_info(person)")}
+        if "error" not in cols:
+            db.execute_sql("ALTER TABLE person ADD COLUMN error TEXT")
+
+
 def ensure_db_schema() -> None:
     """Create tables if they do not already exist."""
     db.connect(reuse_if_open=True)
     db.create_tables(
-        [Person, Room, CadetAttendance, Session, FaceIdentityMap], safe=True
+        [Person, Room, CadetAttendance, Session, FaceIdentityMap, SyncCursor],
+        safe=True,
     )
+    _migrate_schema()
     db.close()
 
 

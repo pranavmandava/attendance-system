@@ -7,19 +7,17 @@
 #   brew install caddy
 #   ./scripts/caddy-https.sh
 #
-# iPhone URL: https://192.168.4.26:8443
-# Railway:    VITE_AXON_API_URL=https://192.168.4.26:8443
+# The script auto-detects your LAN IP and writes Caddyfile before starting Caddy.
+# iPhone URL: https://<your-lan-ip>:8443
+# Railway:    VITE_AXON_API_URL=https://<your-lan-ip>:8443
 
 {
 	local_certs
 }
 
-https://192.168.4.26:8443 {
-	reverse_proxy 127.0.0.1:1337
-	tls internal
-}
-
-https://localhost:8443 {
+https://<your-lan-ip>:8443, https://localhost:8443 {
+	bind 0.0.0.0
+	bind [::]
 	reverse_proxy 127.0.0.1:1337
 	tls internal
 }

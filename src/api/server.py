@@ -2,16 +2,25 @@ import os
 from datetime import datetime
 from os import uname
 
-import requests as req
 from flask import Flask, request
 from flask_cors import CORS
 from uuid_extension import uuid7
 
+from src.api.command_stream import start_command_stream, stop_command_stream
+from src.api.enroll_confirm import confirm_enrollment_to_cloud
+from src.api.kcc_client import (
+    KccPermanentFailure,
+    KccUnavailable,
+    PERMANENT_FAILURE,
+    get_kcc_client,
+)
+from src.api.sync_sweeper import start_sync_sweeper, stop_sync_sweeper
+
 from src.api.connectivity import connectivity_bp
 from src.api.enroll import enroll_bp
-from src.api.enrollment_state import get_session, set_phase
+from src.api.enrollment_state import set_phase
 from src.api.people import people_bp
-from src.api.session import get_active_session_id, session_bp
+from src.api.session import session_bp
 from src.ipc import (
     add_message_handler,
     broadcast_message,
@@ -207,35 +216,23 @@ def setup_rooms():
 # ---------------------------------------------------------------------------
 
 
-def _mark_attendance_remote(person_id: str, attendanceTimeStamp: str, session_id: str):
-    """Send attendance mark request to the remote Axon API and return the
-    `syncedAt` timestamp if the call is successful. Returns None on failure.
-    """
-
-    print("[Flask] Sending data to kcc api")
-    url = "http://api.korukondacoachingcentre.com/axon/mark-attendance"
-    try:
-        resp = req.post(
-            url,
-            json={
-                "sessionId": session_id,
-                "personId": person_id,
-                "attendanceTimeStamp": attendanceTimeStamp,
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            print(
-                f"[Attendance] Remote API error {resp.status_code}: {resp.text[:200]}"
-            )
-            return None
-        data = resp.json()
-
-        print("[Flask] Got Response from KCC API", data.get("syncedAt"))
-        return data.get("syncedAt")
-    except Exception as exc:
-        print(f"[Attendance] Remote API request failed: {exc}")
+def _try_sync_attendance(row: CadetAttendance) -> str | None:
+    """Attempt immediate cloud sync for a freshly inserted attendance row."""
+    client = get_kcc_client()
+    if client is None:
         return None
+    try:
+        resp = client.record_attendance(row)
+        return resp.syncedAt
+    except KccUnavailable as exc:
+        print(f"[Attendance] KCC unavailable (sweeper will retry): {exc}")
+        return None
+    except KccPermanentFailure as exc:
+        print(f"[Attendance] Permanent failure: {exc}")
+        row.syncedAt = PERMANENT_FAILURE
+        row.error = str(exc)[:500]
+        row.save()
+        return PERMANENT_FAILURE
 
 
 def _handle_ipc_message(payload: dict):
@@ -261,22 +258,24 @@ def _handle_ipc_message(payload: dict):
             )
             return
 
-        # Call remote API
-        synced_at_iso = _mark_attendance_remote(
-            person_id, attendanceTimeStamp, session_id
-        )
-
-        # Persist to local DB regardless of remote sync success
+        # Persist locally first (syncedAt NULL until cloud confirms)
         try:
             if db.is_closed():
                 db.connect(reuse_if_open=True)
 
-            CadetAttendance.insert(
+            row = CadetAttendance.create(
                 personId=person_id,
                 attendanceTimeStamp=string_to_timestamp(attendanceTimeStamp),
                 sessionId=session_id,
-                syncedAt=string_to_timestamp(synced_at_iso),
-            ).execute()
+                syncedAt=None,
+            )
+
+            synced_at_iso = _try_sync_attendance(row)
+            if synced_at_iso and synced_at_iso != PERMANENT_FAILURE:
+                row.syncedAt = synced_at_iso
+                row.error = None
+                row.save()
+
             # Broadcast attendance event to UI clients
             try:
                 person = Person.get_or_none(Person.uniqueId == person_id)
@@ -285,7 +284,7 @@ def _handle_ipc_message(payload: dict):
                         "type": "attendance",
                         "personId": person_id,
                         "name": person.name if person else None,
-                        "syncedAt": string_to_timestamp(synced_at_iso),
+                        "syncedAt": row.syncedAt,
                     }
                 )
             except Exception:
@@ -300,6 +299,7 @@ def _handle_ipc_message(payload: dict):
         if person_id:
             if status == "completed":
                 set_phase(person_id, "completed", message or "Enrolled")
+                confirm_enrollment_to_cloud(person_id)
             elif status == "failed":
                 set_phase(person_id, "failed", message or "Capture failed")
         print(
@@ -332,9 +332,13 @@ add_message_handler(_handle_ipc_message)
 if __name__ == "__main__":
     # Start the socket server for IPC communication
     start_socket_server()
+    start_sync_sweeper()
+    start_command_stream()
 
     try:
         app.run(debug=True, host="0.0.0.0", port=1337)
     finally:
+        stop_command_stream()
+        stop_sync_sweeper()
         # Cleanup socket server on exit
         stop_socket_server()

@@ -11,9 +11,12 @@ from src.api.enrollment_state import (
     set_phase,
     upsert_prepare,
 )
+from src.api.enroll_confirm import confirm_enrollment_to_cloud
 from src.ipc import broadcast_message
 
 enroll_bp = Blueprint("enroll", __name__)
+
+__all__ = ["enroll_bp", "confirm_enrollment_to_cloud"]
 
 
 def _validate_person_payload(data: dict) -> tuple[dict | None, tuple | None]:

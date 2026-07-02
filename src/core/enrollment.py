@@ -27,7 +27,6 @@ from src.config import (
     ENROLLMENT_IMAGES_DIR,
 )
 from src.schema import FaceIdentityMap, Person, db
-from src.utils import ist_timestamp
 
 
 def _largest_face(faces):
@@ -297,7 +296,7 @@ class EnrollmentCapture:
                 roomId=self.person.get("roomId"),
                 pictureFileName=snapshot_name,
                 personType=self.person["userType"],
-                syncedAt=ist_timestamp(),
+                syncedAt=None,
             ).on_conflict_replace().execute()
             FaceIdentityMap.insert(
                 hubId=hub_id, personId=person_id

@@ -7,12 +7,16 @@ requires-python = "==3.12.10"
 dependencies = [
     "opencv-python>=4.11.0.86",
     "requests>=2.31.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.11.0",
+    "sseclient-py>=1.8.0",
     "inspireface>=1.2.3.post3",
     "pyside6==6.8.0.2",
     "flask>=3.1.1",
     "flask-cors>=6.0.1",
     "uuid-extension>=0.2.0",
     "peewee>=3.18.2",
+    "python-dotenv>=1.1.0",
     "pytz>=2025.2",
     "gunicorn>=23.0.0",
 ]

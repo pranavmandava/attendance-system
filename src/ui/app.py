@@ -16,15 +16,16 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from src.camera import open_camera
-from src.config import APP_FRAME_HEIGHT, APP_FRAME_WIDTH
+from src.config import APP_FRAME_HEIGHT, APP_FRAME_WIDTH, KCC_LOGO_PATH
 from src.core.face_recognizer import FaceRecognizer
 from src.ipc import (
     add_client_message_handler,
@@ -32,7 +33,16 @@ from src.ipc import (
     start_socket_client,
     stop_socket_client,
 )
-from src.schema import CadetAttendance, Person, Room, Session, db, ensure_db_schema
+from src.logger import get_core_ui_logger
+from src.schema import (
+    CadetAttendance,
+    FaceIdentityMap,
+    Person,
+    Room,
+    Session,
+    db,
+    ensure_db_schema,
+)
 
 
 class BasicApp(QMainWindow):
@@ -42,12 +52,22 @@ class BasicApp(QMainWindow):
     enroll_capture_requested = Signal(dict)
     enroll_cancel_requested = Signal(dict)
     unenroll_requested = Signal(dict)
+    delete_embedding_requested = Signal(dict)
+    start_session_requested = Signal(dict)
+    end_session_requested = Signal(dict)
 
     MODE_CAPTURE = "capture"
     MODE_ENROLLMENT = "enrollment"
 
+    # Bottom-right indicator labels for each kiosk mode
+    _MODE_DISPLAY = {
+        MODE_CAPTURE: "Capture",
+        MODE_ENROLLMENT: "Enroll",
+    }
+
     def __init__(self):
         super().__init__()
+        self.logger = get_core_ui_logger("ui")
         self.cap = None
         self.recognizer = None
         self.is_active_session = False
@@ -58,48 +78,60 @@ class BasicApp(QMainWindow):
         self.enroll_capture_requested.connect(self._on_enroll_capture)
         self.enroll_cancel_requested.connect(self._on_enroll_cancel)
         self.unenroll_requested.connect(self._handle_unenroll)
+        self.delete_embedding_requested.connect(self._handle_delete_embedding)
+        self.start_session_requested.connect(self._handle_start_session)
+        self.end_session_requested.connect(self._handle_end_session)
         self.init_ui()
         self.setup_socket_communication()
         self._enter_capture_mode()
 
     def init_ui(self):
-        """Initialize the user interface"""
-        # Set window title
+        """Initialize the user interface.
+
+        The central widget is a stack of two pages:
+
+        Idle page — shown whenever there is no active session (and no
+        enrollment in progress). Just the KCC logo with a prompt to start a
+        new session; the camera is fully stopped so no faces are processed.
+
+        Attendance page (fullscreen kiosk for a monitor):
+            +-------------------+----------------------------------+
+            |  Room Attendance  |   <session status>               |
+            |  ┌─────────────┐  |   ┌────────────────────────────┐ |
+            |  │ room table  │  |   │                            │ |
+            |  │             │  |   │       camera (video)       │ |
+            |  │             │  |   │                            │ |
+            |  └─────────────┘  |   └────────────────────────────┘ |
+            |                   |   ┌────────────────────────────┐ |
+            |                   |   │  Admission No.  •  Name    │ |
+            |                   |   └────────────────────────────┘ |
+            +-------------------+----------------------------------+
+        """
         self.setWindowTitle("Axon Attendance System")
 
-        # Create central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        self.page_stack = QStackedWidget()
+        self.setCentralWidget(self.page_stack)
 
-        # Root split: left controls, right video
-        root = QHBoxLayout(central_widget)
-        root.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # ---- Idle page: KCC logo + "start a session" prompt ----
+        self.idle_page = self._build_idle_page()
+        self.page_stack.addWidget(self.idle_page)
 
-        # Left side (controls)
+        # ---- Attendance page: room table + camera + identity box ----
+        self.attendance_page = QWidget()
+        self.page_stack.addWidget(self.attendance_page)
+
+        root = QHBoxLayout(self.attendance_page)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(20)
+
+        # ---- Left panel: room attendance summary ----
         left = QVBoxLayout()
-        left.setAlignment(Qt.AlignTop)
+        left.setSpacing(10)
 
-        self.status_label = QLabel("Capture mode — starting camera...")
-        self.status_label.setAlignment(Qt.AlignLeft)
-        left.addWidget(self.status_label)
-
-        self.enrollment_label = QLabel("")
-        self.enrollment_label.setAlignment(Qt.AlignLeft)
-        self.enrollment_label.setWordWrap(True)
-        self.enrollment_label.setVisible(False)
-        left.addWidget(self.enrollment_label)
-
-        self.messages_display = QTextEdit()
-        self.messages_display.setReadOnly(True)
-        self.messages_display.setMinimumWidth(420)
-        self.messages_display.setMinimumHeight(220)
-        left.addWidget(self.messages_display)
-
-        # Room attendance table
         self.room_table = QTableWidget(self)
         self.room_table.setColumnCount(4)
         self.room_table.setHorizontalHeaderLabels(
-            ["Room name", "Total count", "Present", "Absent"]
+            ["Room name", "Total", "Present", "Absent"]
         )
         header = self.room_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Stretch)
@@ -107,28 +139,93 @@ class BasicApp(QMainWindow):
         self.room_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.room_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.room_table.setAlternatingRowColors(True)
-        left.addWidget(self.room_table)
-
-        # Right side (video)
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setFixedSize(APP_FRAME_WIDTH, APP_FRAME_HEIGHT)
-        self.video_label.setStyleSheet(
-            "background-color: #000000; border: 1px solid #dee2e6;"
-        )
-        # Initially hidden until camera pipeline is ready
-        self.video_label.setVisible(False)
+        left.addWidget(self.room_table, 1)
         self.room_table.setVisible(False)
 
-        # Add to root with order: left then right (video at rightmost)
-        root.addLayout(left, 0)
-        root.addWidget(self.video_label, 1)
+        # Placeholder shown when no session is active so the left column
+        # doesn't collapse to nothing.
+        self.room_placeholder = QLabel("No active session")
+        self.room_placeholder.setObjectName("placeholder")
+        self.room_placeholder.setAlignment(Qt.AlignCenter)
+        left.addWidget(self.room_placeholder, 1)
 
-        # Set window size
+        # ---- Right panel: camera + identity info box ----
+        right = QVBoxLayout()
+        right.setSpacing(12)
+
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setStyleSheet(
+            "background-color: #000000; border: 1px solid #dee2e6; border-radius: 10px;"
+        )
+        self.video_label.setVisible(False)
+        right.addWidget(self.video_label, 1)
+
+        # Identity box directly under the camera — shows admission no. + name
+        # of the recognized person, or enrollment info when in enroll mode.
+        # The widget stays in the layout (reserved space) but is visually
+        # blanked via the `hidden` property when no face is recognized, so the
+        # camera box above keeps a fixed height.
+        self.info_label = QLabel("")
+        self.info_label.setObjectName("infoBox")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        self.info_label.setMinimumHeight(96)
+        self.info_label.setProperty("hidden", True)
+        right.addWidget(self.info_label)
+
+        root.addLayout(left, 1)
+        root.addLayout(right, 2)
+
+        # Bottom-left session info (active session name + start timestamp, or
+        # "No active session"). Added as a non-permanent status-bar widget so it
+        # sits on the left, opposite the mode indicator.
+        self.session_info_label = QLabel("No active session")
+        self.session_info_label.setObjectName("sessionInfo")
+        self.statusBar().addWidget(self.session_info_label, 1)
+
+        # Bottom-right mode indicator (permanent status-bar widget → right-aligned)
+        self.mode_indicator = QLabel(self._mode_display_text())
+        self.mode_indicator.setObjectName("modeIndicator")
+        self.mode_indicator.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.statusBar().addPermanentWidget(self.mode_indicator)
+
+        # No session known at startup — begin on the idle page.
+        self.page_stack.setCurrentWidget(self.idle_page)
+
         self.showFullScreen()
-
-        # Apply white theme using stylesheet only
         self.apply_white_theme()
+
+    def _build_idle_page(self) -> QWidget:
+        """Idle screen shown when no session is active: logo + prompt only."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(28)
+
+        logo = QLabel()
+        logo.setAlignment(Qt.AlignCenter)
+        pixmap = QPixmap(str(KCC_LOGO_PATH))
+        if pixmap.isNull():
+            self.logger.warning("KCC logo not found at %s", KCC_LOGO_PATH)
+            logo.setText("KCC")
+            logo.setObjectName("idleLogoFallback")
+        else:
+            logo.setPixmap(pixmap.scaledToWidth(420, Qt.SmoothTransformation))
+        layout.addWidget(logo)
+
+        title = QLabel("No Active Session")
+        title.setObjectName("idleTitle")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        subtitle = QLabel("Start a new session from the app to begin attendance.")
+        subtitle.setObjectName("idleSubtitle")
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(subtitle)
+
+        return page
 
     def setup_socket_communication(self):
         """Setup socket communication with the server."""
@@ -151,26 +248,27 @@ class BasicApp(QMainWindow):
         try:
             self.cap = open_camera()
         except RuntimeError as exc:
-            self.messages_display.append(f"Error: {exc}")
+            self.logger.error("Camera open failed: %s", exc)
+            self.info_label.setText(f"Camera error: {exc}")
             return
 
-        # Initialize recognizer
-        self.recognizer = FaceRecognizer()
+        # Initialize recognizer (reused across camera stop/start cycles —
+        # InspireFace launch + FeatureHub enable must only happen once)
+        if self.recognizer is None:
+            self.recognizer = FaceRecognizer()
         # Pass current session id (if already resolved) so idempotency starts aligned
         try:
             self.recognizer.set_current_session(self.current_session_id)
             # Seed idempotency from DB for current session to avoid duplicates
             self._seed_recognizer_from_db_for_current_session()
         except Exception:
-            pass
+            self.logger.exception("Failed to seed recognizer for current session")
 
         # Timer to fetch frames and update UI ~30 FPS
         self.video_timer = QTimer(self)
         self.video_timer.timeout.connect(self._process_frame)
         self.video_timer.start(33)
         self.video_label.setVisible(True)
-        if self.kiosk_mode == self.MODE_CAPTURE:
-            self.status_label.setText("Capture mode — camera active")
 
     def _process_frame(self):
         if not self.cap or not self.recognizer:
@@ -189,21 +287,111 @@ class BasicApp(QMainWindow):
         # Process frame: enrollment preview/capture takes priority over recognition
         if self.recognizer and self.recognizer.is_enrolling:
             annotated, status = self.recognizer.process_enrollment_frame(frame)
+            self._refresh_enrollment_info(status)
             if status.done or status.failed:
                 self._enrollment_finished(status)
         elif self.is_active_session and self.kiosk_mode == self.MODE_CAPTURE and self.recognizer:
-            annotated = self.recognizer.recognize_faces(frame)
+            annotated, recognized = self.recognizer.recognize_faces(frame)
+            self._refresh_recognition_info(recognized)
         else:
             annotated = frame
 
-        # Convert to QImage (no zoom: scale with aspect ratio to label size)
+        # Convert to QImage and scale to fill the video area (keep aspect ratio)
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         bytes_per_line = ch * w
         qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
-        # Display at native configured resolution without extra scaling
-        self.video_label.setPixmap(pix)
+        scaled = pix.scaled(
+            self.video_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.video_label.setPixmap(scaled)
+
+    # --- Identity info box (below the camera) ----------------------------------
+
+    def _set_session_info(self, active: bool, name: str | None = None,
+                          start_timestamp: str | None = None) -> None:
+        """Update the bottom status bar with the active session's name + start time."""
+        if not hasattr(self, "session_info_label"):
+            return
+        if not active or not name:
+            self.session_info_label.setText("No active session")
+            return
+        started = self._format_session_timestamp(start_timestamp)
+        suffix = f"  ·  Started {started}" if started else ""
+        self.session_info_label.setText(f"Session: {name}{suffix}")
+
+    @staticmethod
+    def _format_session_timestamp(raw: str | None) -> str:
+        """Render an ISO session start timestamp as a readable local string."""
+        if not raw:
+            return ""
+        try:
+            from datetime import datetime
+
+            dt = datetime.fromisoformat(raw)
+            return dt.strftime("%d %b %Y, %I:%M %p")
+        except Exception:
+            return raw
+
+    def _refresh_recognition_info(self, recognized: list[dict]) -> None:
+        """Update the info box with the recognized person's admission + name."""
+        if self.kiosk_mode != self.MODE_CAPTURE:
+            return
+        if not self.is_active_session:
+            self._set_info_box_hidden(True)
+            self.info_label.setText("Waiting for session...")
+            return
+        if not recognized:
+            self._set_info_box_hidden(True)
+            self.info_label.setText("Waiting for face...")
+            return
+        # Show the first recognized person (kiosk is single-subject by design)
+        person = recognized[0]
+        name = person.get("name") or "Unknown"
+        admission = person.get("admissionNumber") or "—"
+        self.info_label.setText(
+            f"<div style='font-size:16px;color:#cfe2ff;'>Admission No.</div>"
+            f"<div style='font-size:34px;color:#ffffff;'>{admission}</div>"
+            f"<div style='font-size:22px;color:#ffd43b;'>{name}</div>"
+        )
+        self._set_info_box_hidden(False)
+
+    def _set_info_box_hidden(self, hidden: bool) -> None:
+        """Toggle the info box between visually blank and shown.
+
+        The widget always stays in the layout so the camera box above keeps a
+        fixed height; when ``hidden`` is True the box is rendered transparent
+        with no border and its text is cleared so nothing is visible.
+        """
+        self.info_label.setProperty("hidden", bool(hidden))
+        if hidden:
+            self.info_label.setText("")
+        # Re-polish so the dynamic-property stylesheet selector applies.
+        self.info_label.style().unpolish(self.info_label)
+        self.info_label.style().polish(self.info_label)
+
+    def _refresh_enrollment_info(self, status) -> None:
+        """Show enrollment subject metadata + capture progress under the camera."""
+        person = self.pending_enrollment or {}
+        name = person.get("preferredName") or "—"
+        admission = person.get("admissionNumber") or "—"
+        room = person.get("roomId") or "—"
+        bed = person.get("bedNumber")
+        bed_text = str(bed) if bed is not None else "—"
+        progress = ""
+        if status and status.capturing:
+            progress = f"<div style='font-size:18px;color:#ffd43b;'>Capturing {status.accepted}/{status.required}</div>"
+        self.info_label.setText(
+            f"<div style='font-size:14px;color:#cfe2ff;'>Enrolling — Admission No.</div>"
+            f"<div style='font-size:34px;color:#ffffff;'>{admission}</div>"
+            f"<div style='font-size:22px;color:#ffd43b;'>{name}</div>"
+            f"<div style='font-size:15px;color:#d0ebff;'>Room {room} · Bed {bed_text}</div>"
+            f"{progress}"
+        )
+        self._set_info_box_hidden(False)
 
     def query_current_session(self):
         """Fetch current session status from Flask API and update label."""
@@ -218,10 +406,14 @@ class BasicApp(QMainWindow):
                 # Capture session id (stringify for consistency across DB/HTTP)
                 new_session_id = None
                 old_session_id = getattr(self, "current_session_id", None)
+                sess_name = None
+                sess_start = None
                 if is_active:
                     sess = data.get("session") or {}
                     sid = sess.get("id")
                     new_session_id = str(sid) if sid is not None else None
+                    sess_name = sess.get("name")
+                    sess_start = sess.get("startTimestamp")
                 self.current_session_id = new_session_id
                 # Inform recognizer so per-session idempotency set is kept correct
                 if self.recognizer:
@@ -237,38 +429,17 @@ class BasicApp(QMainWindow):
                             except Exception:
                                 pass
                     except Exception:
-                        pass
-                if is_active:
-                    self.status_label.setText(
-                        f"Attendance system is active: {data.get('session').get('name')}"
-                    )
-                else:
-                    self.status_label.setText("Please create a new session")
+                        self.logger.exception("recognizer session sync failed")
+                self._set_session_info(is_active, sess_name, sess_start)
             else:
-                self.status_label.setText("Please create a new session")
+                self._set_session_info(False)
             self._set_active_ui(is_active)
         except Exception:
-            self.status_label.setText("Please create a new session")
+            self.logger.exception("query_current_session failed")
+            self._set_session_info(False)
             self._set_active_ui(False)
             # When unreachable, consider session unknown
             self.current_session_id = None
-
-    def send_message(self):
-        """Send a message to the server."""
-        message = self.message_input.text().strip()
-        if message:
-            # Send via socket as a dictionary payload
-            payload = {
-                "type": "user_message",
-                "message": message,
-                "timestamp": None,  # Could add timestamp if needed
-            }
-            success = send_message(payload)
-            if success:
-                self.messages_display.append(f"You: {message}")
-                self.message_input.clear()
-            else:
-                self.messages_display.append("Error: Failed to send message")
 
     def handle_server_message(self, payload: dict):
         """Handle messages received from the server."""
@@ -285,38 +456,65 @@ class BasicApp(QMainWindow):
             self.enroll_capture_requested.emit(payload)
         elif msg_type == "unenroll-request":
             self.unenroll_requested.emit(payload)
+        elif msg_type == "delete-embedding":
+            self.delete_embedding_requested.emit(payload)
+        elif msg_type == "start-session":
+            self.start_session_requested.emit(payload)
+        elif msg_type == "end-session":
+            self.end_session_requested.emit(payload)
         elif msg_type == "enrollment-result":
             name = payload.get("name") or payload.get("personId")
-            self.messages_display.append(
-                f"Enrollment {payload.get('status')}: {name}"
+            self.logger.info(
+                "Enrollment %s: %s", payload.get("status"), name
             )
         elif msg_type == "attendance":
             name = payload.get("name") or payload.get("personId")
-            self.messages_display.append(f"Attendance marked: {name}")
+            self.logger.info("Attendance marked: %s", name)
             # Refresh the room table to reflect new present counts
             try:
                 self.refresh_room_table()
             except Exception:
-                pass
+                self.logger.exception("refresh_room_table failed on attendance")
         else:
-            # Fallback display for any other payloads
-            self.messages_display.append(f"Server: {payload}")
+            self.logger.debug("Unhandled server payload: %s", payload)
 
     # --- Kiosk modes ------------------------------------------------------------
 
+    def _mode_display_text(self) -> str:
+        """Human-readable label for the current kiosk mode."""
+        return f"Mode: {self._MODE_DISPLAY.get(self.kiosk_mode, self.kiosk_mode)}"
+
+    def _refresh_mode_indicator(self) -> None:
+        """Sync the bottom-right mode indicator with the current kiosk mode."""
+        if hasattr(self, "mode_indicator"):
+            self.mode_indicator.setText(self._mode_display_text())
+
     def _enter_capture_mode(self) -> None:
-        """Default mode: camera on, recognition when a session is active."""
+        """Default mode: camera on and recognizing only while a session is active."""
         self.kiosk_mode = self.MODE_CAPTURE
         self.pending_enrollment = None
-        self.enrollment_label.setVisible(False)
         if self.recognizer:
             self.recognizer.cancel_enrollment()
-        self._ensure_camera_pipeline()
-        self.video_label.setVisible(True)
-        if self.is_active_session:
-            self.status_label.setText("Capture mode — attendance session active")
+        self._update_view()
+        self._refresh_recognition_info([])
+        self._refresh_mode_indicator()
+
+    def _update_view(self) -> None:
+        """Pick the idle vs attendance page and gate the camera to match.
+
+        The camera runs only when it is actually needed — during an active
+        session or an admin-initiated enrollment. Otherwise it is fully
+        released, so no faces can be detected, recognized, or saved while
+        the kiosk is idle.
+        """
+        camera_needed = self.is_active_session or self.kiosk_mode == self.MODE_ENROLLMENT
+        if camera_needed:
+            self._ensure_camera_pipeline()
+            self.video_label.setVisible(True)
+            self.page_stack.setCurrentWidget(self.attendance_page)
         else:
-            self.status_label.setText("Capture mode — waiting for session")
+            self._stop_camera_pipeline()
+            self.page_stack.setCurrentWidget(self.idle_page)
 
     def _enter_enrollment_mode(self, payload: dict) -> None:
         """Show live preview and student metadata; wait for PWA capture."""
@@ -324,9 +522,7 @@ class BasicApp(QMainWindow):
         name = payload.get("preferredName")
         user_type = payload.get("userType")
         if not person_id or not name or not user_type:
-            self.messages_display.append(
-                f"Enrollment prepare missing fields: {payload}"
-            )
+            self.logger.warning("Enrollment prepare missing fields: %s", payload)
             return
 
         self._ensure_camera_pipeline()
@@ -340,23 +536,16 @@ class BasicApp(QMainWindow):
         self.pending_enrollment = payload
         self.recognizer.arm_enrollment(payload)
 
-        admission = payload.get("admissionNumber") or "—"
-        room = payload.get("roomId") or "—"
-        bed = payload.get("bedNumber")
-        bed_text = str(bed) if bed is not None else "—"
-
-        self.enrollment_label.setText(
-            f"Enrollment mode\n"
-            f"Name: {name}\n"
-            f"Admission: {admission}\n"
-            f"Room: {room}\n"
-            f"Bed: {bed_text}\n"
-            f"Press Capture in the app when ready"
+        self._update_view()
+        self.info_label.setText(
+            f"<div style='font-size:14px;color:#cfe2ff;'>Enrolling — Admission No.</div>"
+            f"<div style='font-size:34px;color:#ffffff;'>{payload.get('admissionNumber') or '—'}</div>"
+            f"<div style='font-size:22px;color:#ffd43b;'>{name}</div>"
+            f"<div style='font-size:15px;color:#d0ebff;'>Press Capture in the app when ready</div>"
         )
-        self.enrollment_label.setVisible(True)
-        self.video_label.setVisible(True)
-        self.status_label.setText("Enrollment mode — waiting for capture")
-        self.messages_display.append(f"Enrollment prepared: {name}")
+        self._set_info_box_hidden(False)
+        self.logger.info("Enrollment prepared: %s", name)
+        self._refresh_mode_indicator()
 
     def _on_enroll_prepare(self, payload: dict) -> None:
         self._enter_enrollment_mode(payload)
@@ -364,8 +553,8 @@ class BasicApp(QMainWindow):
     def _on_enroll_capture(self, payload: dict) -> None:
         person_id = payload.get("personId")
         if not self.recognizer or not self.recognizer.is_enrolling:
-            self.messages_display.append(
-                f"Capture ignored — enrollment not prepared ({person_id})"
+            self.logger.warning(
+                "Capture ignored — enrollment not prepared (%s)", person_id
             )
             return
         if (
@@ -373,15 +562,15 @@ class BasicApp(QMainWindow):
             and person_id
             and self.pending_enrollment.get("personId") != person_id
         ):
-            self.messages_display.append(
-                f"Capture personId mismatch: expected "
-                f"{self.pending_enrollment.get('personId')}, got {person_id}"
+            self.logger.warning(
+                "Capture personId mismatch: expected %s, got %s",
+                self.pending_enrollment.get("personId"),
+                person_id,
             )
             return
         try:
             self.recognizer.start_enrollment_capture()
-            self.status_label.setText("Enrollment mode — capturing face")
-            self.messages_display.append("Capture started")
+            self.logger.info("Capture started")
         except Exception as exc:
             person = self.pending_enrollment or {}
             self._report_enrollment_failure(
@@ -391,9 +580,7 @@ class BasicApp(QMainWindow):
             )
 
     def _on_enroll_cancel(self, payload: dict) -> None:
-        self.messages_display.append(
-            f"Enrollment cancelled: {payload.get('personId')}"
-        )
+        self.logger.info("Enrollment cancelled: %s", payload.get("personId"))
         self._enter_capture_mode()
 
     def _ensure_camera_pipeline(self) -> None:
@@ -403,7 +590,7 @@ class BasicApp(QMainWindow):
     def _report_enrollment_failure(
         self, person_id: str | None, name: str | None, message: str
     ) -> None:
-        self.messages_display.append(f"Enrollment failed: {message}")
+        self.logger.error("Enrollment failed: %s", message)
         send_message(
             {
                 "type": "enrollment-result",
@@ -418,7 +605,7 @@ class BasicApp(QMainWindow):
     def _enrollment_finished(self, status) -> None:
         """Report capture result over IPC and return to capture mode."""
         person = status.person or self.pending_enrollment or {}
-        self.messages_display.append(f"Enrollment: {status.message}")
+        self.logger.info("Enrollment: %s", status.message)
         send_message(
             {
                 "type": "enrollment-result",
@@ -442,11 +629,85 @@ class BasicApp(QMainWindow):
             if self.recognizer is None:
                 self.recognizer = FaceRecognizer()
             isf.feature_hub_face_remove(int(hub_id))
-            self.messages_display.append(
-                f"Removed enrollment for {payload.get('personId')}"
+            self.logger.info(
+                "Removed enrollment for %s", payload.get("personId")
             )
-        except Exception as exc:
-            self.messages_display.append(f"Unenroll failed: {exc}")
+        except Exception:
+            self.logger.exception("Unenroll failed")
+
+    def _handle_delete_embedding(self, payload: dict) -> None:
+        """Remove embedding when cloud sends delete-embedding over IPC."""
+        hub_id = payload.get("hubId")
+        person_id = payload.get("personId") or payload.get("cadetId")
+        if hub_id is not None:
+            try:
+                import inspireface as isf
+
+                if self.recognizer is None:
+                    self.recognizer = FaceRecognizer()
+                isf.feature_hub_face_remove(int(hub_id))
+                self.logger.info("Deleted embedding hubId=%s person=%s", hub_id, person_id)
+            except Exception:
+                self.logger.exception("delete-embedding failed for hubId=%s", hub_id)
+        elif person_id and self.recognizer:
+            try:
+                if db.is_closed():
+                    db.connect(reuse_if_open=True)
+                mapping = FaceIdentityMap.get_or_none(
+                    FaceIdentityMap.personId == person_id
+                )
+                if mapping:
+                    import inspireface as isf
+
+                    isf.feature_hub_face_remove(int(mapping.hubId))
+                    self.logger.info("Deleted embedding for person=%s", person_id)
+            except Exception:
+                self.logger.exception("delete-embedding lookup failed")
+            finally:
+                try:
+                    if not db.is_closed():
+                        db.close()
+                except Exception:
+                    pass
+
+    def _handle_start_session(self, payload: dict) -> None:
+        """Apply start-session command from cloud sync."""
+        session_id = payload.get("sessionId")
+        if not session_id:
+            return
+        self.current_session_id = str(session_id)
+        if self.recognizer:
+            try:
+                self.recognizer.set_current_session(self.current_session_id)
+                self._seed_recognizer_from_db_for_current_session()
+            except Exception:
+                self.logger.exception("start-session recognizer sync failed")
+        self._set_session_from_payload(payload, active=True)
+        self.logger.info("Session started: %s", payload.get("name") or session_id)
+
+    def _handle_end_session(self, payload: dict) -> None:
+        """Apply end-session command from cloud sync."""
+        session_id = payload.get("sessionId")
+        if session_id and str(session_id) == str(self.current_session_id):
+            self.current_session_id = None
+            if self.recognizer:
+                try:
+                    self.recognizer.set_current_session(None)
+                except Exception:
+                    pass
+        self._set_session_from_payload(payload, active=False)
+        self.logger.info("Session ended: %s", session_id)
+
+    def _set_session_from_payload(self, payload: dict, *, active: bool) -> None:
+        name = payload.get("name")
+        start_ts = payload.get("startTimestamp")
+        self._set_session_info(active, name, start_ts)
+        self._set_active_ui(active)
+        if active:
+            try:
+                self.refresh_room_table()
+            except Exception:
+                self.logger.exception("refresh_room_table failed on start-session")
 
     def _stop_camera_pipeline(self) -> None:
         """Stop the frame timer and release the camera/recognizer."""
@@ -460,7 +721,12 @@ class BasicApp(QMainWindow):
                 except Exception:
                     pass
             self.cap = None
-            self.recognizer = None
+            # Keep self.recognizer alive: InspireFace launch + FeatureHub
+            # enable are process-global and not safely repeatable. With the
+            # camera released no frames reach it, so nothing is recognized.
+            # Drop the last frame so a stale image doesn't flash when the
+            # camera view comes back for the next session.
+            self.video_label.clear()
         except Exception:
             pass
 
@@ -494,37 +760,75 @@ class BasicApp(QMainWindow):
                 font-size: 18px;
                 font-weight: bold;
             }
-            QTextEdit {
-                background-color: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                padding: 8px;
-                font-family: monospace;
-                font-size: 12px;
+            QLabel#sessionInfo {
+                color: #495057;
+                font-size: 15px;
+                font-weight: 600;
+                padding: 2px 8px;
             }
-            QLineEdit {
-                background-color: #ffffff;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                padding: 8px;
+            QLabel#infoBox {
+                background-color: #1864ab;
+                color: #ffffff;
+                font-size: 22px;
+                font-weight: bold;
+                border: 1px solid #0b4a8a;
+                border-radius: 12px;
+                padding: 16px 24px;
+            }
+            QLabel#infoBox[hidden="true"] {
+                background-color: transparent;
+                border: none;
+                color: transparent;
+            }
+            QLabel#idleTitle {
+                color: #212529;
+                font-size: 36px;
+                font-weight: 700;
+            }
+            QLabel#idleSubtitle {
+                color: #868e96;
+                font-size: 20px;
+                font-weight: 500;
+            }
+            QLabel#idleLogoFallback {
+                color: #1864ab;
+                font-size: 72px;
+                font-weight: 800;
+            }
+            QLabel#placeholder {
+                color: #adb5bd;
+                font-size: 18px;
+                font-weight: 600;
+                border: 1px dashed #dee2e6;
+                border-radius: 10px;
+            }
+            QLabel#modeIndicator {
+                background-color: #e7f5ff;
+                color: #1864ab;
                 font-size: 14px;
+                font-weight: 600;
+                padding: 4px 12px;
+                border: 1px solid #1864ab;
+                border-radius: 10px;
+                margin: 2px 8px 2px 0px;
             }
             QTableWidget {
                 background-color: #ffffff;
                 border: 1px solid #dee2e6;
-                border-radius: 4px;
+                border-radius: 8px;
                 gridline-color: #e9ecef;
-                font-size: 14px;
+                font-size: 16px;
             }
             QTableView::item, QTableWidget::item {
-                padding: 6px;
+                padding: 10px 8px;
             }
             QHeaderView::section {
                 background-color: #f1f3f5;
                 color: #495057;
                 font-weight: 600;
                 border: 1px solid #dee2e6;
-                padding: 6px 8px;
+                padding: 8px 8px;
+                font-size: 15px;
             }
             QTableWidget::item:selected {
                 background-color: #e7f5ff;
@@ -534,34 +838,34 @@ class BasicApp(QMainWindow):
 
     # --- Active session gating -------------------------------------------------
     def _set_active_ui(self, active: bool) -> None:
-        """Toggle attendance session UI; camera stays on in capture mode."""
+        """Toggle between the attendance page and the idle (logo) page."""
         if active == self.is_active_session:
             return
         self.is_active_session = active
+        self._update_view()
 
         if active:
             self.room_table.setVisible(True)
+            self.room_placeholder.setVisible(False)
             try:
                 ensure_db_schema()
             except Exception:
-                pass
+                self.logger.exception("ensure_db_schema failed")
             self.refresh_room_table()
             if not hasattr(self, "room_table_timer") or self.room_table_timer is None:
                 self.room_table_timer = QTimer(self)
                 self.room_table_timer.timeout.connect(self.refresh_room_table)
             if not self.room_table_timer.isActive():
                 self.room_table_timer.start(5000)
-            if self.kiosk_mode == self.MODE_CAPTURE:
-                self.status_label.setText("Capture mode — attendance session active")
         else:
             self.room_table.setVisible(False)
+            self.room_placeholder.setVisible(True)
             try:
                 if hasattr(self, "room_table_timer") and self.room_table_timer:
                     self.room_table_timer.stop()
             except Exception:
                 pass
-            if self.kiosk_mode == self.MODE_CAPTURE:
-                self.status_label.setText("Capture mode — waiting for session")
+        self._refresh_recognition_info([])
 
     def refresh_room_table(self) -> None:
         """Populate the room attendance table from the database."""
@@ -641,11 +945,7 @@ class BasicApp(QMainWindow):
                 self.room_table.setItem(idx, 3, item_absent)
 
         except Exception as exc:
-            # Basic fallback: show the error in the messages display
-            try:
-                self.messages_display.append(f"Error loading room data: {exc}")
-            except Exception:
-                pass
+            self.logger.exception("Error loading room data: %s", exc)
         finally:
             try:
                 if not db.is_closed():

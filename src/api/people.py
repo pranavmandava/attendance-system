@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import os
-
 from flask import Blueprint, jsonify
 
 from src.api.enrollment_state import get_session
-from src.config import ENROLLMENT_IMAGES_DIR
-from src.ipc import broadcast_message
 from src.schema import FaceIdentityMap, Person, db
 
 people_bp = Blueprint("people", __name__, url_prefix="/people")
@@ -53,36 +49,3 @@ def enrollment_status(person_id: str):
             "syncedAt": person.syncedAt if person else None,
         }
     ), 200
-
-
-@people_bp.route("/<person_id>", methods=["DELETE"])
-def delete_person(person_id: str):
-    mapping = FaceIdentityMap.get_or_none(FaceIdentityMap.personId == person_id)
-
-    # The kiosk UI owns the InspireFace FeatureHub; ask it to drop the
-    # embedding. If no UI is connected the stale feature resolves to
-    # "Unknown" (its mapping row is gone) until re-enrollment overwrites it.
-    if mapping:
-        broadcast_message(
-            {
-                "type": "unenroll-request",
-                "personId": person_id,
-                "hubId": mapping.hubId,
-            }
-        )
-        mapping.delete_instance()
-
-    try:
-        person = Person.get_or_none(Person.uniqueId == person_id)
-        if person:
-            image_path = os.path.join(ENROLLMENT_IMAGES_DIR, person.pictureFileName)
-            try:
-                if os.path.exists(image_path):
-                    os.remove(image_path)
-            except OSError:
-                pass
-            person.delete_instance()
-    except Exception as e:
-        return jsonify({"error": "Failed to delete person", "details": str(e)}), 500
-
-    return jsonify({"deleted": True, "personId": person_id}), 200

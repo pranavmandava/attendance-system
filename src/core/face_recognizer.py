@@ -95,29 +95,27 @@ class FaceRecognizer:
     ) -> None:
         self.on_first_attendance = callback
 
-    def _draw_faces(self, frame, faces, names, confidences):
+    def _draw_faces(self, frame, faces, names):
+        """Draw thin detection boxes only — no name/confidence overlay.
+
+        Identity text is surfaced to the UI via the recognized list returned by
+        ``recognize_faces`` so it can be presented in a dedicated info panel.
+        """
         for i, face in enumerate(faces):
             x1, y1, x2, y2 = face.location
             box = (int(x1), int(y1), int(x2), int(y2))
             name = names[i]
-            confidence = confidences[i]
-            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-
-            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
-
-            text = f"{name}: {confidence:.2f}" if name != "Unknown" else name
-            cv2.putText(
-                frame,
-                text,
-                (box[0], box[1] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                color,
-                2,
-            )
+            color = (0, 220, 0) if name != "Unknown" else (0, 0, 255)
+            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 1)
         return frame
 
     def recognize_faces(self, frame):
+        """Process one frame and return ``(annotated_frame, recognized)``.
+
+        ``recognized`` is a list of dicts (``name``, ``admissionNumber``) for the
+        known faces in the frame, ordered by detection order. Unknown faces are
+        still boxed but excluded from this list.
+        """
         try:
             faces = self.session.face_detection(frame)
         except Exception as e:
@@ -126,10 +124,10 @@ class FaceRecognizer:
                 *frame.shape,
                 e,
             )
-            return frame
+            return frame, []
 
         names = []
-        confidences = []
+        recognized: list[dict] = []
 
         if faces:
             for face in faces:
@@ -148,17 +146,16 @@ class FaceRecognizer:
                 feature = self.session.face_feature_extract(frame, face)
                 if feature is None:
                     names.append("Unknown")
-                    confidences.append(0.0)
                     continue
 
                 search_result = isf.feature_hub_face_search(feature)
                 if not search_result or search_result.similar_identity.id == -1:
                     names.append("Unknown")
-                    confidences.append(0.0)
                     continue
 
                 feature_id = search_result.similar_identity.id
                 resolved_name = "Unknown"
+                person = None
                 try:
                     if db.is_closed():
                         db.connect(reuse_if_open=True)
@@ -195,9 +192,15 @@ class FaceRecognizer:
                         db.close()
 
                 names.append(resolved_name)
-                confidences.append(search_result.confidence)
+                if person is not None:
+                    recognized.append(
+                        {
+                            "name": person.name,
+                            "admissionNumber": person.admissionNumber,
+                        }
+                    )
 
-        return self._draw_faces(frame, faces, names, confidences)
+        return self._draw_faces(frame, faces, names), recognized
 
     def add_face(self, frame, person_id: Optional[str] = None):
         """Enroll the largest face in frame; returns (hub_id, feature) or None."""

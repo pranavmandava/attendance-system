@@ -3,14 +3,20 @@
 All configuration variables should be defined here.
 """
 
+import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # --- Project paths ---------------------------------------------------------
 ROOT_DIR = Path(__file__).parent.parent
+load_dotenv(ROOT_DIR / ".env")
 MODELS_DIR = ROOT_DIR / "models"
 DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+ASSETS_DIR = ROOT_DIR / "assets"
+KCC_LOGO_PATH = ASSETS_DIR / "kcc-logo.jpg"
 
 
 # --- Primary SQLite database (attendance + InspireFace FeatureHub tables) ---
@@ -55,3 +61,8 @@ SIMILARITY_THRESHOLD = 0.48
 
 # FeatureHub persists embeddings in the same SQLite file as attendance metadata
 DATABASE_PATH = DB_PATH
+
+# --- kcc-app device sync (cloud REST + SSE) --------------------------------
+KCC_API_URL = os.environ.get("KCC_API_URL", "").rstrip("/")
+DEVICE_ID = os.environ.get("DEVICE_ID", "")
+DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
