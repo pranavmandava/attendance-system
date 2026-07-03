@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Iterator, Literal, Optional, Union
 
 import httpx
@@ -248,6 +249,43 @@ class KccDeviceClient:
         )
         data = self._post_json("/openapi/device.enrollment.confirm", payload)
         return EnrollmentConfirmOut.model_validate(data)
+
+    def upload_enrollment_image(self, person_id: str, image_path: str) -> str:
+        """Upload the kiosk snapshot to kcc-app object storage.
+
+        Returns the stored picture URL kcc-app persisted for the person.
+        """
+        url = f"{self.base_url}/openapi/device/enrollment/image"
+        try:
+            with open(image_path, "rb") as fh:
+                resp = httpx.post(
+                    url,
+                    # No Content-Type header here — httpx sets the multipart
+                    # boundary itself when files= is provided.
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    data={"personId": person_id},
+                    files={
+                        "image": (
+                            os.path.basename(image_path),
+                            fh,
+                            "image/jpeg",
+                        )
+                    },
+                    timeout=self.timeout_s,
+                )
+        except httpx.RequestError as exc:
+            raise KccUnavailable(str(exc)) from exc
+
+        if resp.status_code >= 500:
+            raise KccUnavailable(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code >= 400:
+            raise KccPermanentFailure(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            body = resp.json()
+        except json.JSONDecodeError as exc:
+            raise KccUnavailable(f"Invalid JSON response: {exc}") from exc
+        return str(body.get("picture") or "")
 
     def ack_command(self, ack: CommandAckIn) -> CommandAckOut:
         data = self._post_json("/openapi/device.commands.ack", ack)
