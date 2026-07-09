@@ -59,6 +59,11 @@ SIMILARITY_THRESHOLD = 0.48
 # Gundam_RK3588 targets NPU but currently segfaults on Axon — do not use yet
 # INSPIREFACE_MODEL_NAME = "Gundam_RK3588"
 
+# --- Flask API server runtime ----------------------------------------------
+AXON_DEBUG = os.environ.get("AXON_DEBUG", "").lower() in {"1", "true", "yes"}
+AXON_HOST = os.environ.get("AXON_HOST", "127.0.0.1")
+AXON_PORT = int(os.environ.get("AXON_PORT", "1337"))
+
 # FeatureHub persists embeddings in the same SQLite file as attendance metadata
 DATABASE_PATH = DB_PATH
 

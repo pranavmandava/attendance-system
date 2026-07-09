@@ -36,6 +36,11 @@ InspireFace/
 
 *.log
 
+## Secrets
+.env
+.env.*
+!.env.example
+
 ## Data stuff
 data/
 reference/
