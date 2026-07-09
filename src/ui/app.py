@@ -55,6 +55,7 @@ class BasicApp(QMainWindow):
     delete_embedding_requested = Signal(dict)
     start_session_requested = Signal(dict)
     end_session_requested = Signal(dict)
+    attendance_marked = Signal(dict)
 
     MODE_CAPTURE = "capture"
     MODE_ENROLLMENT = "enrollment"
@@ -81,6 +82,7 @@ class BasicApp(QMainWindow):
         self.delete_embedding_requested.connect(self._handle_delete_embedding)
         self.start_session_requested.connect(self._handle_start_session)
         self.end_session_requested.connect(self._handle_end_session)
+        self.attendance_marked.connect(self._handle_attendance_marked)
         self.init_ui()
         self.setup_socket_communication()
         self._enter_capture_mode()
@@ -468,13 +470,7 @@ class BasicApp(QMainWindow):
                 "Enrollment %s: %s", payload.get("status"), name
             )
         elif msg_type == "attendance":
-            name = payload.get("name") or payload.get("personId")
-            self.logger.info("Attendance marked: %s", name)
-            # Refresh the room table to reflect new present counts
-            try:
-                self.refresh_room_table()
-            except Exception:
-                self.logger.exception("refresh_room_table failed on attendance")
+            self.attendance_marked.emit(payload)
         else:
             self.logger.debug("Unhandled server payload: %s", payload)
 
@@ -629,6 +625,10 @@ class BasicApp(QMainWindow):
             if self.recognizer is None:
                 self.recognizer = FaceRecognizer()
             isf.feature_hub_face_remove(int(hub_id))
+            if self.recognizer:
+                self.recognizer.invalidate_identity(
+                    hub_id=int(hub_id), person_id=payload.get("personId")
+                )
             self.logger.info(
                 "Removed enrollment for %s", payload.get("personId")
             )
@@ -646,6 +646,10 @@ class BasicApp(QMainWindow):
                 if self.recognizer is None:
                     self.recognizer = FaceRecognizer()
                 isf.feature_hub_face_remove(int(hub_id))
+                if self.recognizer:
+                    self.recognizer.invalidate_identity(
+                        hub_id=int(hub_id), person_id=person_id
+                    )
                 self.logger.info("Deleted embedding hubId=%s person=%s", hub_id, person_id)
             except Exception:
                 self.logger.exception("delete-embedding failed for hubId=%s", hub_id)
@@ -660,6 +664,10 @@ class BasicApp(QMainWindow):
                     import inspireface as isf
 
                     isf.feature_hub_face_remove(int(mapping.hubId))
+                    if self.recognizer:
+                        self.recognizer.invalidate_identity(
+                            hub_id=int(mapping.hubId), person_id=person_id
+                        )
                     self.logger.info("Deleted embedding for person=%s", person_id)
             except Exception:
                 self.logger.exception("delete-embedding lookup failed")
@@ -697,6 +705,15 @@ class BasicApp(QMainWindow):
                     pass
         self._set_session_from_payload(payload, active=False)
         self.logger.info("Session ended: %s", session_id)
+
+    def _handle_attendance_marked(self, payload: dict) -> None:
+        """Refresh the room table when the API confirms a new attendance row."""
+        name = payload.get("name") or payload.get("personId")
+        self.logger.info("Attendance marked: %s", name)
+        try:
+            self.refresh_room_table()
+        except Exception:
+            self.logger.exception("refresh_room_table failed on attendance")
 
     def _set_session_from_payload(self, payload: dict, *, active: bool) -> None:
         name = payload.get("name")

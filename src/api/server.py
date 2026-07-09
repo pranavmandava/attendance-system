@@ -328,16 +328,23 @@ def _handle_ipc_message(payload: dict):
 add_message_handler(_handle_ipc_message)
 
 
-if __name__ == "__main__":
-    # Start the socket server for IPC communication
+def start_runtime_services() -> None:
+    """Start IPC + background sync services (used by __main__ and gunicorn)."""
     start_socket_server()
     start_sync_sweeper()
     start_command_stream()
 
+
+def stop_runtime_services() -> None:
+    """Stop IPC + background sync services."""
+    stop_command_stream()
+    stop_sync_sweeper()
+    stop_socket_server()
+
+
+if __name__ == "__main__":
+    start_runtime_services()
     try:
         app.run(debug=AXON_DEBUG, host=AXON_HOST, port=AXON_PORT)
     finally:
-        stop_command_stream()
-        stop_sync_sweeper()
-        # Cleanup socket server on exit
-        stop_socket_server()
+        stop_runtime_services()

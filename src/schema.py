@@ -95,6 +95,26 @@ def _migrate_schema() -> None:
         cols = {row[1] for row in db.execute_sql("PRAGMA table_info(cadetattendance)")}
         if "error" not in cols:
             db.execute_sql("ALTER TABLE cadetattendance ADD COLUMN error TEXT")
+        # Early deploys created syncedAt NOT NULL, but rows must start with
+        # syncedAt NULL (unsynced) until the cloud confirms — rebuild the
+        # table to relax the constraint, since SQLite can't ALTER it away.
+        synced_at_not_null = any(
+            row[1] == "syncedAt" and row[3]
+            for row in db.execute_sql("PRAGMA table_info(cadetattendance)")
+        )
+        if synced_at_not_null:
+            with db.atomic():
+                db.execute_sql(
+                    "ALTER TABLE cadetattendance RENAME TO cadetattendance_legacy"
+                )
+                db.create_tables([CadetAttendance], safe=True)
+                db.execute_sql(
+                    'INSERT INTO cadetattendance '
+                    '(id, "personId", "attendanceTimeStamp", "sessionId", "syncedAt", error) '
+                    'SELECT id, "personId", "attendanceTimeStamp", "sessionId", "syncedAt", error '
+                    'FROM cadetattendance_legacy'
+                )
+                db.execute_sql("DROP TABLE cadetattendance_legacy")
     if "person" in tables:
         cols = {row[1] for row in db.execute_sql("PRAGMA table_info(person)")}
         if "error" not in cols:

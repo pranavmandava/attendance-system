@@ -22,6 +22,9 @@ class FaceRecognizer:
         self._attendance_marked_by_session: Dict[str, Set[str]] = {}
         self.on_first_attendance: Optional[Callable[[str], None]] = None
         self._enrollment: Optional[EnrollmentCapture] = None
+        # hubId -> {"personId": str, "name": str, "admissionNumber": str} | None
+        # None means "known-absent" (searched, no mapping) to avoid re-querying misses.
+        self._identity_cache: Dict[int, Optional[dict]] = {}
 
         try:
             self.logger.info("FaceRecognizer initialisation started")
@@ -95,6 +98,48 @@ class FaceRecognizer:
     ) -> None:
         self.on_first_attendance = callback
 
+    def resolve_identity(self, hub_id: int) -> Optional[dict]:
+        """Return identity dict for a FeatureHub id, using an in-memory cache.
+
+        On a miss, open the DB once, look up FaceIdentityMap -> Person, and cache
+        the result (including a cached None for 'no mapping') so the recognition
+        loop does not touch SQLite per frame.
+        """
+        if hub_id in self._identity_cache:
+            return self._identity_cache[hub_id]
+        identity = None
+        try:
+            if db.is_closed():
+                db.connect(reuse_if_open=True)
+            mapping = FaceIdentityMap.get_or_none(FaceIdentityMap.hubId == hub_id)
+            if mapping:
+                person = Person.get_or_none(Person.uniqueId == mapping.personId)
+                if person:
+                    identity = {
+                        "personId": person.uniqueId,
+                        "name": person.name,
+                        "admissionNumber": person.admissionNumber,
+                    }
+        except Exception:
+            self.logger.exception("resolve_identity failed for hub_id=%s", hub_id)
+            return None  # do not cache transient DB errors
+        self._identity_cache[hub_id] = identity
+        return identity
+
+    def invalidate_identity(
+        self, hub_id: Optional[int] = None, person_id: Optional[str] = None
+    ) -> None:
+        """Drop cache entries for a removed embedding (by hubId and/or personId)."""
+        if hub_id is not None:
+            self._identity_cache.pop(int(hub_id), None)
+        if person_id is not None:
+            for hid in [
+                h
+                for h, v in self._identity_cache.items()
+                if v and v.get("personId") == person_id
+            ]:
+                self._identity_cache.pop(hid, None)
+
     def _draw_faces(self, frame, faces, names):
         """Draw thin detection boxes only — no name/confidence overlay.
 
@@ -154,51 +199,38 @@ class FaceRecognizer:
                     continue
 
                 feature_id = search_result.similar_identity.id
-                resolved_name = "Unknown"
-                person = None
-                try:
-                    if db.is_closed():
-                        db.connect(reuse_if_open=True)
-                    mapping = FaceIdentityMap.get_or_none(
-                        FaceIdentityMap.hubId == feature_id
-                    )
-                    if mapping:
-                        person = Person.get_or_none(
-                            Person.uniqueId == mapping.personId
-                        )
-                        if person:
-                            resolved_name = person.name
-                            is_first_time = self.add_attendance_if_new(person.uniqueId)
+                identity = self.resolve_identity(feature_id)
+                if identity is None:
+                    names.append("Unknown")
+                    continue
 
-                            if is_first_time and self.current_session_id:
-                                try:
-                                    send_message(
-                                        {
-                                            "type": "person-recognized",
-                                            "sessionId": self.current_session_id,
-                                            "personId": person.uniqueId,
-                                            "attendanceTimeStamp": ist_timestamp(),
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                try:
-                                    if self.on_first_attendance:
-                                        self.on_first_attendance(person.uniqueId)
-                                except Exception:
-                                    pass
-                finally:
-                    if not db.is_closed():
-                        db.close()
+                resolved_name = identity["name"]
+                is_first_time = self.add_attendance_if_new(identity["personId"])
+                if is_first_time and self.current_session_id:
+                    try:
+                        send_message(
+                            {
+                                "type": "person-recognized",
+                                "sessionId": self.current_session_id,
+                                "personId": identity["personId"],
+                                "attendanceTimeStamp": ist_timestamp(),
+                            }
+                        )
+                    except Exception:
+                        self.logger.exception("send_message(person-recognized) failed")
+                    try:
+                        if self.on_first_attendance:
+                            self.on_first_attendance(identity["personId"])
+                    except Exception:
+                        self.logger.exception("on_first_attendance callback failed")
 
                 names.append(resolved_name)
-                if person is not None:
-                    recognized.append(
-                        {
-                            "name": person.name,
-                            "admissionNumber": person.admissionNumber,
-                        }
-                    )
+                recognized.append(
+                    {
+                        "name": identity["name"],
+                        "admissionNumber": identity["admissionNumber"],
+                    }
+                )
 
         return self._draw_faces(frame, faces, names), recognized
 

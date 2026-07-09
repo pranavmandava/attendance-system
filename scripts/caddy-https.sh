@@ -27,7 +27,7 @@ if ! curl -sf http://127.0.0.1:1337/ >/dev/null; then
     done
   else
     echo "Flask is not running on :1337. Start it first:"
-    echo "  uv run python -m src.api.server"
+    echo "  AXON_DEBUG=1 uv run gunicorn -c gunicorn.conf.py 'src.api.server:app'"
     exit 1
   fi
 fi
