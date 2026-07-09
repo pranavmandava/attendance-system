@@ -13,7 +13,7 @@ else
   SUDO=(sudo)
 fi
 
-install -m 0755 "$ROOT/scripts/kiosk-update.sh" "$ROOT/scripts/kiosk-update.sh"
+chmod 0755 "$ROOT/scripts/kiosk-update.sh" "$ROOT/scripts/install-kiosk-systemd.sh"
 
 for unit in \
   axon-attendance-api.service \
