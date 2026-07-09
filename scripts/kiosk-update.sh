@@ -46,10 +46,38 @@ else
   log "WARNING: uv not on PATH; skipping dependency sync"
 fi
 
+log "Refreshing systemd unit files from checkout"
+UNIT_SRC="$ROOT/deploy/systemd"
+for unit in \
+  axon-attendance-api.service \
+  axon-attendance-ui.service \
+  axon-attendance-caddy.service \
+  axon-attendance-update.service \
+  axon-attendance-update.timer
+do
+  if [[ -f "$UNIT_SRC/$unit" ]]; then
+    sudo install -m 0644 "$UNIT_SRC/$unit" "/etc/systemd/system/$unit"
+  fi
+done
+sudo systemctl daemon-reload
+
+# First-time Caddy install (no-op if already present / unit already enabled).
+if [[ -x "$ROOT/scripts/install-kiosk-caddy.sh" ]] && ! command -v caddy >/dev/null 2>&1; then
+  log "Caddy missing — installing"
+  "$ROOT/scripts/install-kiosk-caddy.sh"
+fi
+if [[ -f /etc/systemd/system/axon-attendance-caddy.service ]]; then
+  sudo systemctl enable axon-attendance-caddy.service >/dev/null
+fi
+
 log "Restarting attendance services"
 # Unit files are system-wide; vicharak has NOPASSWD sudo on axon.
 sudo systemctl restart axon-attendance-api.service
 # UI Requires= API; restart UI explicitly so the Qt process reloads code.
 sudo systemctl restart axon-attendance-ui.service
+# Caddy regenerates Caddyfile with current LAN IP on each start.
+if systemctl list-unit-files axon-attendance-caddy.service >/dev/null 2>&1; then
+  sudo systemctl restart axon-attendance-caddy.service
+fi
 
 log "Update complete at $(git rev-parse --short HEAD)"

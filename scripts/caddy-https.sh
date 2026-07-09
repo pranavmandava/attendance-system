@@ -54,9 +54,12 @@ cat >"$CADDYFILE" <<EOF
 
 {
 	local_certs
+	# Avoid binding :80 for HTTP→HTTPS redirects (not needed; phones use :8443).
+	auto_https disable_redirects
+	skip_install_trust
 }
 
-https://${LAN_IP}:8443, https://localhost:8443 {
+https://${LAN_IP}:8443, https://localhost:8443, https://127.0.0.1:8443 {
 	# Caddy defaults to IPv6-only on macOS; bind IPv4 so LAN/loopback HTTPS works.
 	bind 0.0.0.0
 	bind [::]

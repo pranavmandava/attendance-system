@@ -1,0 +1,34 @@
+[Unit]
+Description=Axon attendance Caddy HTTPS proxy (LAN :8443 → Flask)
+Documentation=https://github.com/pranavmandava/attendance-system
+After=network-online.target axon-attendance-api.service
+Wants=network-online.target
+Requires=axon-attendance-api.service
+
+[Service]
+Type=simple
+User=vicharak
+Group=vicharak
+WorkingDirectory=/home/vicharak/attendance-system
+Environment=HOME=/home/vicharak
+Environment=PATH=/home/vicharak/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=XDG_DATA_HOME=/home/vicharak/.local/share
+# Regenerate Caddyfile with the current LAN IP, then wait for Flask.
+ExecStartPre=/home/vicharak/attendance-system/scripts/kiosk-caddy.sh --wait --write-only
+ExecStart=/usr/bin/caddy run --config /home/vicharak/attendance-system/Caddyfile
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axon-attendance-caddy
+
+# Bind :8443 as non-root (port > 1024). Do not set PrivateTmp — not required,
+# but keep NoNewPrivileges consistent with sibling units.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
