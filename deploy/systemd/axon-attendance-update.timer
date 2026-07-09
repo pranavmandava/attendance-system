@@ -1,0 +1,13 @@
+[Unit]
+Description=Check GitHub main for attendance-system updates every 5 minutes
+Documentation=https://github.com/pranavmandava/attendance-system
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+Unit=axon-attendance-update.service
+
+[Install]
+WantedBy=timers.target

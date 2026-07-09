@@ -1,0 +1,20 @@
+[Unit]
+Description=Pull attendance-system main and restart kiosk services
+Documentation=https://github.com/pranavmandava/attendance-system
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vicharak
+Group=vicharak
+WorkingDirectory=/home/vicharak/attendance-system
+Environment=HOME=/home/vicharak
+Environment=PATH=/home/vicharak/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/vicharak/attendance-system/scripts/kiosk-update.sh
+Nice=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axon-attendance-update

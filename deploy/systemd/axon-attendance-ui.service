@@ -1,0 +1,37 @@
+[Unit]
+Description=Axon attendance PySide6 kiosk UI
+Documentation=https://github.com/pranavmandava/attendance-system
+After=graphical.target axon-attendance-api.service
+Requires=axon-attendance-api.service
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=vicharak
+Group=vicharak
+WorkingDirectory=/home/vicharak/attendance-system
+Environment=HOME=/home/vicharak
+Environment=PATH=/home/vicharak/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/vicharak/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=QT_QPA_PLATFORM=xcb
+EnvironmentFile=-/home/vicharak/attendance-system/.env
+# Wait for IPC socket from the API before starting the UI
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do [ -S /tmp/axon-attendance.sock ] && exit 0; sleep 1; done; echo "IPC socket not ready" >&2; exit 1'
+ExecStart=/home/vicharak/.local/bin/uv run python -m src.ui.app
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axon-attendance-ui
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,36 @@
+[Unit]
+Description=Axon attendance Flask API (gunicorn)
+Documentation=https://github.com/pranavmandava/attendance-system
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vicharak
+Group=vicharak
+WorkingDirectory=/home/vicharak/attendance-system
+Environment=HOME=/home/vicharak
+Environment=PATH=/home/vicharak/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/vicharak/attendance-system/.env
+# Production defaults (override in .env if needed)
+Environment=AXON_DEBUG=0
+Environment=AXON_HOST=127.0.0.1
+Environment=AXON_PORT=1337
+ExecStart=/home/vicharak/.local/bin/uv run gunicorn -c gunicorn.conf.py 'src.api.server:app'
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+
+# Journald: stdout/stderr from gunicorn (accesslog/errorlog = "-")
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=axon-attendance-api
+
+# Do NOT set PrivateTmp — IPC lives at /tmp/axon-attendance.sock and must
+# be visible to axon-attendance-ui.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
