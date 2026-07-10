@@ -155,11 +155,8 @@ class EnrollmentCapture:
         location, hint = self._detect_single_face(frame)
         if hint:
             return self._status(hint, location, armed=True)
-        return self._status(
-            f"Ready: {self.person.get('preferredName', '')} — press Capture in app",
-            location,
-            armed=True,
-        )
+        # Ready state: no camera overlay — identity lives in the info label.
+        return self._status("", location, armed=True)
 
     def _process_capturing(self, frame) -> CaptureStatus:
         if time.monotonic() - self._capture_started_at > ENROLL_TIMEOUT_SECONDS:

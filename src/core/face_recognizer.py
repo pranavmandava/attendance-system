@@ -258,6 +258,20 @@ class FaceRecognizer:
         self._enrollment = EnrollmentCapture(self.session, person)
         self._enrollment.arm()
 
+    @staticmethod
+    def _enrollment_overlay_message(message: str) -> Optional[str]:
+        """Return face-guidance text to draw on the camera, or None to hide.
+
+        Ready / capture-progress / success copy is shown in the info label
+        under the camera — keep the feed for positioning hints only.
+        """
+        msg = (message or "").strip()
+        if not msg:
+            return None
+        if msg.startswith(("Ready:", "Capturing", "Captured ", "Enrolled ")):
+            return None
+        return msg
+
     def start_enrollment_capture(self) -> None:
         """Begin collecting face samples (triggered from PWA)."""
         if not self._enrollment:
@@ -289,30 +303,19 @@ class FaceRecognizer:
                 color = (255, 200, 0)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-        name = self._enrollment.person.get("preferredName", "")
-        if status.capturing:
-            header = f"Capturing {name} [{status.accepted}/{status.required}]"
-        else:
-            header = f"Enrollment: {name}"
-
-        cv2.putText(
-            frame,
-            header,
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 160, 0),
-            2,
-        )
-        cv2.putText(
-            frame,
-            status.message,
-            (10, 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 0, 255) if status.failed else (0, 200, 0),
-            2,
-        )
+        # Identity / progress copy lives in the info label under the camera.
+        # Only draw face-adjustment guidance on the feed itself.
+        overlay = self._enrollment_overlay_message(status.message)
+        if overlay:
+            cv2.putText(
+                frame,
+                overlay,
+                (10, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 0, 255) if status.failed else (0, 200, 0),
+                2,
+            )
 
         if status.done or status.failed:
             self.logger.info(

@@ -42,6 +42,7 @@ def _validate_person_payload(data: dict) -> tuple[dict | None, tuple | None]:
         "preferredName": data["preferredName"],
         "admissionNumber": data.get("admissionNumber"),
         "roomId": data.get("roomId"),
+        "roomName": data.get("roomName"),
         "bedNumber": data.get("bedNumber"),
         "userType": data["userType"],
     }

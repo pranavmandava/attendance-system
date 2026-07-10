@@ -173,7 +173,7 @@ class BasicApp(QMainWindow):
         self.info_label = QLabel("")
         self.info_label.setObjectName("infoBox")
         self.info_label.setAlignment(Qt.AlignCenter)
-        self.info_label.setMinimumHeight(96)
+        self.info_label.setMinimumHeight(128)
         self.info_label.setProperty("hidden", True)
         right.addWidget(self.info_label)
 
@@ -375,12 +375,29 @@ class BasicApp(QMainWindow):
         self.info_label.style().unpolish(self.info_label)
         self.info_label.style().polish(self.info_label)
 
+    def _enrollment_room_label(self, person: dict) -> str:
+        """Prefer room name from the prepare payload; fall back to local Room table."""
+        room_name = person.get("roomName")
+        if room_name:
+            return str(room_name)
+        room_id = person.get("roomId")
+        if not room_id:
+            return "—"
+        try:
+            db.connect(reuse_if_open=True)
+            room = Room.get_or_none(Room.roomId == room_id)
+            if room and room.roomName:
+                return str(room.roomName)
+        except Exception:
+            self.logger.exception("Failed to resolve room name for %s", room_id)
+        return "—"
+
     def _refresh_enrollment_info(self, status) -> None:
         """Show enrollment subject metadata + capture progress under the camera."""
         person = self.pending_enrollment or {}
         name = person.get("preferredName") or "—"
         admission = person.get("admissionNumber") or "—"
-        room = person.get("roomId") or "—"
+        room = self._enrollment_room_label(person)
         bed = person.get("bedNumber")
         bed_text = str(bed) if bed is not None else "—"
         progress = ""
@@ -389,7 +406,7 @@ class BasicApp(QMainWindow):
         self.info_label.setText(
             f"<div style='font-size:14px;color:#cfe2ff;'>Enrolling — Admission No.</div>"
             f"<div style='font-size:34px;color:#ffffff;'>{admission}</div>"
-            f"<div style='font-size:22px;color:#ffd43b;'>{name}</div>"
+            f"<div style='font-size:30px;color:#ffd43b;'>{name}</div>"
             f"<div style='font-size:15px;color:#d0ebff;'>Room {room} · Bed {bed_text}</div>"
             f"{progress}"
         )
@@ -533,10 +550,14 @@ class BasicApp(QMainWindow):
         self.recognizer.arm_enrollment(payload)
 
         self._update_view()
+        room = self._enrollment_room_label(payload)
+        bed = payload.get("bedNumber")
+        bed_text = str(bed) if bed is not None else "—"
         self.info_label.setText(
             f"<div style='font-size:14px;color:#cfe2ff;'>Enrolling — Admission No.</div>"
             f"<div style='font-size:34px;color:#ffffff;'>{payload.get('admissionNumber') or '—'}</div>"
-            f"<div style='font-size:22px;color:#ffd43b;'>{name}</div>"
+            f"<div style='font-size:30px;color:#ffd43b;'>{name}</div>"
+            f"<div style='font-size:15px;color:#d0ebff;'>Room {room} · Bed {bed_text}</div>"
             f"<div style='font-size:15px;color:#d0ebff;'>Press Capture in the app when ready</div>"
         )
         self._set_info_box_hidden(False)
@@ -790,7 +811,7 @@ class BasicApp(QMainWindow):
                 font-weight: bold;
                 border: 1px solid #0b4a8a;
                 border-radius: 12px;
-                padding: 16px 24px;
+                padding: 20px 24px;
             }
             QLabel#infoBox[hidden="true"] {
                 background-color: transparent;
