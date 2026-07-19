@@ -34,7 +34,7 @@ ENROLL_CENTER_TOLERANCE = 0.25  # face center within +/-25% of frame center
 ENROLL_MIN_SHARPNESS = 60.0  # Laplacian variance on the face crop (blur gate)
 ENROLL_MIN_SELF_SIMILARITY = 0.55  # each sample must agree with the running mean
 ENROLL_MIN_SAMPLE_GAP_SECONDS = 0.4  # spread samples over time for pose variety
-ENROLL_TIMEOUT_SECONDS = 5.0  # abort if samples can't be collected in time
+ENROLL_TIMEOUT_SECONDS = 15.0  # abort if samples can't be collected in time
 
 # --- GUI Application (PySide6) ---------------------------------------------
 APP_ENROL_FRAMES = 20
