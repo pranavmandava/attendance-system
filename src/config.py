@@ -58,7 +58,7 @@ else:
 # --- InspireFace ------------------------------------------------------------
 INSPIREFACE_MODEL_NAME = "Pikachu"
 # Pikachu modelpack default; matches official sample threshold
-SIMILARITY_THRESHOLD = 0.48
+SIMILARITY_THRESHOLD = 0.55
 # Gundam_RK3588 targets NPU but currently segfaults on Axon — do not use yet
 # INSPIREFACE_MODEL_NAME = "Gundam_RK3588"
 
