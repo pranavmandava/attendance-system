@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.camera import open_camera
-from src.config import APP_FRAME_HEIGHT, APP_FRAME_WIDTH, KCC_LOGO_PATH
+from src.camera import open_camera, prepare_frame
+from src.config import KCC_LOGO_PATH
 from src.core.face_recognizer import FaceRecognizer
 from src.ipc import (
     add_client_message_handler,
@@ -278,13 +278,7 @@ class BasicApp(QMainWindow):
         ret, frame = self.cap.read()
         if not ret:
             return
-        # Ensure configured resolution for InspireFace processing and display
-        if frame.shape[0] != APP_FRAME_HEIGHT or frame.shape[1] != APP_FRAME_WIDTH:
-            frame = cv2.resize(
-                frame,
-                (APP_FRAME_WIDTH, APP_FRAME_HEIGHT),
-                interpolation=cv2.INTER_LINEAR,
-            )
+        frame = prepare_frame(frame)
 
         # Process frame: enrollment preview/capture takes priority over recognition
         if self.recognizer and self.recognizer.is_enrolling:

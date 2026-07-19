@@ -40,6 +40,9 @@ ENROLL_TIMEOUT_SECONDS = 5.0  # abort if samples can't be collected in time
 APP_ENROL_FRAMES = 20
 APP_FRAME_WIDTH = 640
 APP_FRAME_HEIGHT = 480
+# Digital zoom: center-crop then scale back to APP_FRAME_* (1.0 = off).
+# Helps enrollment when the USB cam FOV is too wide for kids standing farther back.
+APP_CAMERA_ZOOM = 1.4
 APP_TIMER_INTERVAL_MS = 33  # For ~30 FPS
 
 APP_HIBERNATE_INTERVAL_MS = 5000  # Check for wake-up every 5 seconds

@@ -98,7 +98,8 @@ class EnrollmentCapture:
     """Collects quality-gated face samples from the live feed for one person.
 
     Two-step flow:
-    1. arm() — store metadata and show a live preview (single-face gate only).
+    1. arm() — store metadata and show a live preview with positioning guidance
+       (closer / centered / hold still) so the subject can line up before capture.
     2. start_capture() — collect ENROLL_SAMPLES_REQUIRED shots when PWA triggers.
     """
 
@@ -151,11 +152,21 @@ class EnrollmentCapture:
         return self._status("Enrollment not armed")
 
     def _process_preview(self, frame) -> CaptureStatus:
-        """Live preview while waiting for the PWA capture button."""
+        """Live preview while waiting for the PWA capture button.
+
+        Runs the same positioning gates as capture (size / center / sharpness)
+        so guidance appears as soon as Prepare kiosk arms the session — without
+        collecting samples yet.
+        """
         location, hint = self._detect_single_face(frame)
         if hint:
             return self._status(hint, location, armed=True)
-        # Ready state: no camera overlay — identity lives in the info label.
+
+        position_hint, _sharpness = self._positioning_feedback(frame, location)
+        if position_hint:
+            return self._status(position_hint, location, armed=True)
+
+        # Lined up: no camera overlay — identity lives in the info label.
         return self._status("", location, armed=True)
 
     def _process_capturing(self, frame) -> CaptureStatus:
@@ -170,25 +181,9 @@ class EnrollmentCapture:
         x1, y1, x2, y2 = (int(v) for v in face.location)
         location = (x1, y1, x2, y2)
 
-        frame_h, frame_w = frame.shape[:2]
-        if (x2 - x1) < ENROLL_MIN_FACE_WIDTH:
-            return self._status("Move closer", location, capturing=True)
-
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        if (
-            abs(cx - frame_w / 2) > frame_w * ENROLL_CENTER_TOLERANCE
-            or abs(cy - frame_h / 2) > frame_h * ENROLL_CENTER_TOLERANCE
-        ):
-            return self._status("Center your face", location, capturing=True)
-
-        crop = frame[max(y1, 0) : max(y2, 1), max(x1, 0) : max(x2, 1)]
-        if crop.size == 0:
-            return self._status("Center your face", location, capturing=True)
-        sharpness = cv2.Laplacian(
-            cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F
-        ).var()
-        if sharpness < ENROLL_MIN_SHARPNESS:
-            return self._status("Hold still", location, capturing=True)
+        position_hint, sharpness = self._positioning_feedback(frame, location)
+        if position_hint:
+            return self._status(position_hint, location, capturing=True)
 
         now = time.monotonic()
         if now - self.last_sample_at < ENROLL_MIN_SAMPLE_GAP_SECONDS:
@@ -235,6 +230,34 @@ class EnrollmentCapture:
         face = faces[0]
         x1, y1, x2, y2 = (int(v) for v in face.location)
         return (x1, y1, x2, y2), None
+
+    @staticmethod
+    def _positioning_feedback(frame, location: Tuple[int, int, int, int]):
+        """Return (hint, sharpness) for size / center / blur gates.
+
+        hint is None when the face is positioned well enough to capture.
+        """
+        x1, y1, x2, y2 = location
+        frame_h, frame_w = frame.shape[:2]
+        if (x2 - x1) < ENROLL_MIN_FACE_WIDTH:
+            return "Move closer", 0.0
+
+        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        if (
+            abs(cx - frame_w / 2) > frame_w * ENROLL_CENTER_TOLERANCE
+            or abs(cy - frame_h / 2) > frame_h * ENROLL_CENTER_TOLERANCE
+        ):
+            return "Center your face", 0.0
+
+        crop = frame[max(y1, 0) : max(y2, 1), max(x1, 0) : max(x2, 1)]
+        if crop.size == 0:
+            return "Center your face", 0.0
+        sharpness = float(
+            cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+        )
+        if sharpness < ENROLL_MIN_SHARPNESS:
+            return "Hold still", sharpness
+        return None, sharpness
 
     @staticmethod
     def _largest_face(faces):
