@@ -268,6 +268,9 @@ class EnrollmentCapture:
     def _finalize(self, location) -> CaptureStatus:
         person_id = self.person["personId"]
         mean_feature = _normalize(np.mean(self.features, axis=0))
+        confidence: Optional[float] = None
+        match_hub_id = -1
+        hub_id: Optional[int] = None
 
         try:
             if db.is_closed():
@@ -275,13 +278,31 @@ class EnrollmentCapture:
 
             # Refuse to enroll a face that already matches a different person
             search_result = isf.feature_hub_face_search(mean_feature)
-            if search_result and search_result.similar_identity.id != -1:
+            if search_result is not None:
+                confidence = float(search_result.confidence)
+                match_hub_id = search_result.similar_identity.id
+
+            if match_hub_id != -1:
                 existing = FaceIdentityMap.get_or_none(
-                    FaceIdentityMap.hubId == search_result.similar_identity.id
+                    FaceIdentityMap.hubId == match_hub_id
                 )
                 if existing and existing.personId != person_id:
                     other = Person.get_or_none(Person.uniqueId == existing.personId)
                     other_name = other.name if other else existing.personId
+                    other_admission = other.admissionNumber if other else None
+                    conf_str = (
+                        f"{confidence:.4f}" if confidence is not None else "n/a"
+                    )
+                    print(
+                        "[Enrollment] rejected: face matches existing person | "
+                        f"enrolling name={self.person.get('preferredName')!r} "
+                        f"admission={self.person.get('admissionNumber') or '?'} "
+                        f"personId={person_id} | "
+                        f"matched name={other_name!r} "
+                        f"admission={other_admission or '?'} "
+                        f"personId={existing.personId} | "
+                        f"confidence={conf_str} hubId={match_hub_id}"
+                    )
                     return self._status(
                         f"Face already enrolled as {other_name}", location, failed=True
                     )
@@ -301,6 +322,12 @@ class EnrollmentCapture:
                 isf.FaceIdentity(mean_feature, id=-1)
             )
             if not ret:
+                print(
+                    "[Enrollment] failed: FeatureHub insert | "
+                    f"name={self.person.get('preferredName')!r} "
+                    f"admission={self.person.get('admissionNumber') or '?'} "
+                    f"personId={person_id}"
+                )
                 return self._status("FeatureHub insert failed", location, failed=True)
 
             snapshot_name = f"{person_id}.jpg"
@@ -322,11 +349,30 @@ class EnrollmentCapture:
                 hubId=hub_id, personId=person_id
             ).on_conflict_replace().execute()
         except Exception as exc:
+            print(
+                "[Enrollment] failed: exception | "
+                f"name={self.person.get('preferredName')!r} "
+                f"admission={self.person.get('admissionNumber') or '?'} "
+                f"personId={person_id} error={exc}"
+            )
             return self._status(f"Enrollment failed: {exc}", location, failed=True)
         finally:
             if not db.is_closed():
                 db.close()
 
+        confidence_str = f"{confidence:.4f}" if confidence is not None else "n/a"
+        match_str = (
+            f"priorMatchHubId={match_hub_id}"
+            if match_hub_id != -1
+            else "priorMatch=none"
+        )
+        print(
+            "[Enrollment] enrolled | "
+            f"name={self.person.get('preferredName')!r} "
+            f"admission={self.person.get('admissionNumber') or '?'} "
+            f"personId={person_id} hubId={hub_id} "
+            f"searchConfidence={confidence_str} {match_str}"
+        )
         return self._status(
             f"Enrolled {self.person['preferredName']}", location, done=True
         )

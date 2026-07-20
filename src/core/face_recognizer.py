@@ -199,14 +199,28 @@ class FaceRecognizer:
                     continue
 
                 feature_id = search_result.similar_identity.id
+                confidence = float(search_result.confidence)
                 identity = self.resolve_identity(feature_id)
                 if identity is None:
+                    print(
+                        f"[FaceRecognition] match without identity mapping "
+                        f"hubId={feature_id} confidence={confidence:.4f}"
+                    )
                     names.append("Unknown")
                     continue
 
                 resolved_name = identity["name"]
                 is_first_time = self.add_attendance_if_new(identity["personId"])
                 if is_first_time and self.current_session_id:
+                    print(
+                        f"[FaceRecognition] recognized "
+                        f"name={identity['name']!r} "
+                        f"admission={identity['admissionNumber'] or '?'} "
+                        f"personId={identity['personId']} "
+                        f"confidence={confidence:.4f} "
+                        f"hubId={feature_id} "
+                        f"sessionId={self.current_session_id}"
+                    )
                     try:
                         send_message(
                             {
