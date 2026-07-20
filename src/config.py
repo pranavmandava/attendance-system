@@ -35,6 +35,10 @@ ENROLL_MIN_SHARPNESS = 60.0  # Laplacian variance on the face crop (blur gate)
 ENROLL_MIN_SELF_SIMILARITY = 0.55  # each sample must agree with the running mean
 ENROLL_MIN_SAMPLE_GAP_SECONDS = 0.4  # spread samples over time for pose variety
 ENROLL_TIMEOUT_SECONDS = 15.0  # abort if samples can't be collected in time
+# Refuse insert only when a different person matches at/above this score.
+# Weaker FeatureHub hits (lookalikes near SIMILARITY_THRESHOLD) are logged
+# but allowed — kids' faces false-positive heavily in the 0.55–0.70 band.
+ENROLL_DUPLICATE_THRESHOLD = 0.75
 
 # --- GUI Application (PySide6) ---------------------------------------------
 APP_ENROL_FRAMES = 20

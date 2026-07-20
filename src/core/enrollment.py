@@ -18,6 +18,7 @@ import numpy as np
 
 from src.config import (
     ENROLL_CENTER_TOLERANCE,
+    ENROLL_DUPLICATE_THRESHOLD,
     ENROLL_MIN_FACE_WIDTH,
     ENROLL_MIN_SAMPLE_GAP_SECONDS,
     ENROLL_MIN_SELF_SIMILARITY,
@@ -293,8 +294,7 @@ class EnrollmentCapture:
                     conf_str = (
                         f"{confidence:.4f}" if confidence is not None else "n/a"
                     )
-                    print(
-                        "[Enrollment] rejected: face matches existing person | "
+                    match_detail = (
                         f"enrolling name={self.person.get('preferredName')!r} "
                         f"admission={self.person.get('admissionNumber') or '?'} "
                         f"personId={person_id} | "
@@ -303,8 +303,25 @@ class EnrollmentCapture:
                         f"personId={existing.personId} | "
                         f"confidence={conf_str} hubId={match_hub_id}"
                     )
-                    return self._status(
-                        f"Face already enrolled as {other_name}", location, failed=True
+                    # Always log the collision; only hard-reject strong matches.
+                    is_hard_duplicate = (
+                        confidence is not None
+                        and confidence >= ENROLL_DUPLICATE_THRESHOLD
+                    )
+                    if is_hard_duplicate:
+                        print(
+                            "[Enrollment] rejected: face matches existing person | "
+                            + match_detail
+                        )
+                        return self._status(
+                            f"Face already enrolled as {other_name}",
+                            location,
+                            failed=True,
+                        )
+                    print(
+                        "[Enrollment] lookalike below duplicate gate "
+                        f"(threshold={ENROLL_DUPLICATE_THRESHOLD:.2f}); allowing | "
+                        + match_detail
                     )
 
             # Re-enrollment: drop the previous embedding for this person
