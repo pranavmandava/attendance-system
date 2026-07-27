@@ -277,7 +277,7 @@ class EnrollmentCapture:
             if db.is_closed():
                 db.connect(reuse_if_open=True)
 
-            # Refuse to enroll a face that already matches a different person
+            # Detect faces that already match a different person (log only; do not block)
             search_result = isf.feature_hub_face_search(mean_feature)
             if search_result is not None:
                 confidence = float(search_result.confidence)
@@ -303,24 +303,19 @@ class EnrollmentCapture:
                         f"personId={existing.personId} | "
                         f"confidence={conf_str} hubId={match_hub_id}"
                     )
-                    # Always log the collision; only hard-reject strong matches.
-                    is_hard_duplicate = (
-                        confidence is not None
-                        and confidence >= ENROLL_DUPLICATE_THRESHOLD
+                    # Log collisions but never block enrollment on face match.
+                    gate = (
+                        "above"
+                        if (
+                            confidence is not None
+                            and confidence >= ENROLL_DUPLICATE_THRESHOLD
+                        )
+                        else "below"
                     )
-                    if is_hard_duplicate:
-                        print(
-                            "[Enrollment] rejected: face matches existing person | "
-                            + match_detail
-                        )
-                        return self._status(
-                            f"Face already enrolled as {other_name}",
-                            location,
-                            failed=True,
-                        )
                     print(
-                        "[Enrollment] lookalike below duplicate gate "
-                        f"(threshold={ENROLL_DUPLICATE_THRESHOLD:.2f}); allowing | "
+                        "[Enrollment] face matches existing person "
+                        f"({gate} duplicate gate "
+                        f"threshold={ENROLL_DUPLICATE_THRESHOLD:.2f}); allowing | "
                         + match_detail
                     )
 

@@ -77,7 +77,8 @@ class DeleteEmbeddingCommand(BaseModel):
     kind: Literal["delete-embedding"]
     commandId: str
     cadetId: str
-    hubId: str
+    hubId: Optional[str] = None
+    admissionNumber: Optional[str] = None
     issuedAt: str
 
 

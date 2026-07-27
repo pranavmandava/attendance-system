@@ -17,7 +17,7 @@ from src.api.kcc_client import (
 )
 from src.config import ENROLLMENT_IMAGES_DIR
 from src.ipc import broadcast_message
-from src.schema import FaceIdentityMap, Person, Session, SyncCursor, db
+from src.schema import CadetAttendance, FaceIdentityMap, Person, Session, SyncCursor, db
 from src.utils import ist_timestamp, string_to_timestamp
 
 PING_MISS_LIMIT = 3
@@ -58,21 +58,39 @@ def _ack_command(client, command_id: str, status: str, detail: str | None = None
     )
 
 
-def _delete_person_local(cadet_id: str, hub_id: str | None) -> None:
+def _delete_person_local(
+    cadet_id: str,
+    hub_id: str | None,
+    admission_number: str | None = None,
+) -> None:
+    """Remove FeatureHub embedding, local JPEG, Person, and attendance rows.
+
+    Resolves the local Person by uniqueId first, then by admissionNumber when
+    the cloud and device ids have drifted (e.g. re-enrollment with a new id).
+    """
+    person = Person.get_or_none(Person.uniqueId == cadet_id)
+    if person is None and admission_number:
+        person = Person.get_or_none(Person.admissionNumber == admission_number)
+
+    person_id = person.uniqueId if person else cadet_id
+    mapping = FaceIdentityMap.get_or_none(FaceIdentityMap.personId == person_id)
+    effective_hub = hub_id if hub_id else (str(mapping.hubId) if mapping else None)
+
     broadcast_message(
         {
             "type": "delete-embedding",
-            "personId": cadet_id,
+            "personId": person_id,
             "cadetId": cadet_id,
-            "hubId": hub_id,
+            "hubId": effective_hub,
+            "admissionNumber": admission_number,
         }
     )
 
-    mapping = FaceIdentityMap.get_or_none(FaceIdentityMap.personId == cadet_id)
     if mapping:
         mapping.delete_instance()
 
-    person = Person.get_or_none(Person.uniqueId == cadet_id)
+    CadetAttendance.delete().where(CadetAttendance.personId == person_id).execute()
+
     if person:
         image_path = os.path.join(ENROLLMENT_IMAGES_DIR, person.pictureFileName)
         try:
@@ -81,6 +99,15 @@ def _delete_person_local(cadet_id: str, hub_id: str | None) -> None:
         except OSError:
             pass
         person.delete_instance()
+    else:
+        # Cloud cadetId may not match local Person.uniqueId — still try the
+        # enrollment image named after the cloud id.
+        image_path = os.path.join(ENROLLMENT_IMAGES_DIR, f"{cadet_id}.jpg")
+        try:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+        except OSError:
+            pass
 
 
 def _handle_start_session(cmd: StartSessionCommand) -> None:
@@ -130,7 +157,11 @@ def _handle_end_session(cmd: EndSessionCommand) -> None:
 def _dispatch_command(client, command: CommandEnvelope) -> tuple[str, str | None]:
     """Apply a command locally. Returns (ack_status, detail)."""
     if command.kind == "delete-embedding":
-        _delete_person_local(command.cadetId, command.hubId)
+        hub_id = command.hubId or None
+        if hub_id == "":
+            hub_id = None
+        admission = getattr(command, "admissionNumber", None)
+        _delete_person_local(command.cadetId, hub_id, admission)
         return "applied", None
 
     if command.kind == "unenroll":
@@ -173,7 +204,10 @@ def _run_sync_heartbeat(client) -> None:
 
     for item in resp.deleteThese:
         print(f"[CommandStream] Reconcile delete cadet={item.cadetId}")
-        _delete_person_local(item.cadetId, item.hubId)
+        hub = item.hubId or None
+        if hub == "":
+            hub = None
+        _delete_person_local(item.cadetId, hub)
 
 
 def _consume_stream(client) -> None:
