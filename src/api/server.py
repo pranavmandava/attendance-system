@@ -221,7 +221,7 @@ def _try_sync_attendance(row: CadetAttendance) -> str | None:
     if client is None:
         return None
     try:
-        resp = client.record_attendance(row)
+        resp = client.record_attendance(row, match_score=row.matchScore)
         return resp.syncedAt
     except KccUnavailable as exc:
         print(f"[Attendance] KCC unavailable (sweeper will retry): {exc}")
@@ -246,6 +246,15 @@ def _handle_ipc_message(payload: dict):
         person_id = payload.get("personId")
         attendanceTimeStamp = payload.get("attendanceTimeStamp")
         session_id = payload.get("sessionId")
+        raw_confidence = payload.get("confidence")
+        match_score: float | None = None
+        if raw_confidence is not None:
+            try:
+                match_score = float(raw_confidence)
+            except (TypeError, ValueError):
+                print(
+                    f"[Attendance] ignoring non-numeric confidence={raw_confidence!r}"
+                )
         if not person_id or not attendanceTimeStamp or not session_id:
             print(
                 "[Attendance] person-recognized payload missing fields",
@@ -266,6 +275,7 @@ def _handle_ipc_message(payload: dict):
                 personId=person_id,
                 attendanceTimeStamp=string_to_timestamp(attendanceTimeStamp),
                 sessionId=session_id,
+                matchScore=match_score,
                 syncedAt=None,
             )
 

@@ -1,10 +1,14 @@
 import platform
+import time
 from typing import Callable, Dict, Iterable, Optional, Set, Tuple
 
 import cv2
 import inspireface as isf
 
-from src.config import INSPIREFACE_MODEL_NAME
+from src.config import (
+    INSPIREFACE_MODEL_NAME,
+    RECOGNITION_CONFIDENCE_LOG_INTERVAL_SECONDS,
+)
 from src.core.enrollment import CaptureStatus, EnrollmentCapture, enroll_from_image
 from src.core.inspireface_engine import create_session, model_dir
 from src.ipc import send_message
@@ -25,6 +29,8 @@ class FaceRecognizer:
         # hubId -> {"personId": str, "name": str, "admissionNumber": str} | None
         # None means "known-absent" (searched, no mapping) to avoid re-querying misses.
         self._identity_cache: Dict[int, Optional[dict]] = {}
+        # personId -> monotonic time of last confidence log (rate-limit repeats)
+        self._confidence_log_at: Dict[str, float] = {}
 
         try:
             self.logger.info("FaceRecognizer initialisation started")
@@ -140,6 +146,52 @@ class FaceRecognizer:
             ]:
                 self._identity_cache.pop(hid, None)
 
+    def _should_log_confidence(self, person_id: str, *, force: bool = False) -> bool:
+        """True on first attendance or when the per-person sample interval elapsed."""
+        if force:
+            self._confidence_log_at[person_id] = time.monotonic()
+            return True
+        now = time.monotonic()
+        last = self._confidence_log_at.get(person_id)
+        if (
+            last is not None
+            and (now - last) < RECOGNITION_CONFIDENCE_LOG_INTERVAL_SECONDS
+        ):
+            return False
+        self._confidence_log_at[person_id] = now
+        return True
+
+    def _log_recognition_confidence(
+        self,
+        *,
+        identity: dict,
+        confidence: float,
+        hub_id: int,
+        first_attendance: bool,
+    ) -> None:
+        """Structured confidence log (file + rate-limited stdout for tmux)."""
+        self.logger.info(
+            "recognition confidence=%.4f personId=%s name=%r admission=%s "
+            "hubId=%s sessionId=%s firstAttendance=%s",
+            confidence,
+            identity["personId"],
+            identity["name"],
+            identity["admissionNumber"] or "?",
+            hub_id,
+            self.current_session_id or "-",
+            first_attendance,
+        )
+        kind = "recognized" if first_attendance else "match"
+        print(
+            f"[FaceRecognition] {kind} "
+            f"name={identity['name']!r} "
+            f"admission={identity['admissionNumber'] or '?'} "
+            f"personId={identity['personId']} "
+            f"confidence={confidence:.4f} "
+            f"hubId={hub_id} "
+            f"sessionId={self.current_session_id or '-'}"
+        )
+
     def _draw_faces(self, frame, faces, names):
         """Draw thin detection boxes only — no name/confidence overlay.
 
@@ -202,6 +254,12 @@ class FaceRecognizer:
                 confidence = float(search_result.confidence)
                 identity = self.resolve_identity(feature_id)
                 if identity is None:
+                    self.logger.warning(
+                        "recognition match without identity mapping "
+                        "hubId=%s confidence=%.4f",
+                        feature_id,
+                        confidence,
+                    )
                     print(
                         f"[FaceRecognition] match without identity mapping "
                         f"hubId={feature_id} confidence={confidence:.4f}"
@@ -211,16 +269,19 @@ class FaceRecognizer:
 
                 resolved_name = identity["name"]
                 is_first_time = self.add_attendance_if_new(identity["personId"])
-                if is_first_time and self.current_session_id:
-                    print(
-                        f"[FaceRecognition] recognized "
-                        f"name={identity['name']!r} "
-                        f"admission={identity['admissionNumber'] or '?'} "
-                        f"personId={identity['personId']} "
-                        f"confidence={confidence:.4f} "
-                        f"hubId={feature_id} "
-                        f"sessionId={self.current_session_id}"
+                if self._should_log_confidence(
+                    identity["personId"], force=is_first_time
+                ):
+                    self._log_recognition_confidence(
+                        identity=identity,
+                        confidence=confidence,
+                        hub_id=feature_id,
+                        first_attendance=bool(
+                            is_first_time and self.current_session_id
+                        ),
                     )
+
+                if is_first_time and self.current_session_id:
                     try:
                         send_message(
                             {
@@ -228,6 +289,7 @@ class FaceRecognizer:
                                 "sessionId": self.current_session_id,
                                 "personId": identity["personId"],
                                 "attendanceTimeStamp": ist_timestamp(),
+                                "confidence": confidence,
                             }
                         )
                     except Exception:
@@ -243,6 +305,7 @@ class FaceRecognizer:
                     {
                         "name": identity["name"],
                         "admissionNumber": identity["admissionNumber"],
+                        "confidence": confidence,
                     }
                 )
 

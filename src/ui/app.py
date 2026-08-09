@@ -33,7 +33,7 @@ from src.ipc import (
     start_socket_client,
     stop_socket_client,
 )
-from src.logger import get_core_ui_logger
+from src.logger import get_core_ui_logger, setup_logging
 from src.schema import (
     CadetAttendance,
     FaceIdentityMap,
@@ -1014,6 +1014,9 @@ class BasicApp(QMainWindow):
 
 def main():
     """Main function to run the application"""
+    setup_logging()
+    logger = get_core_ui_logger("ui")
+    logger.info("UI process starting")
     app = QApplication(sys.argv)
 
     # Create and show the main window

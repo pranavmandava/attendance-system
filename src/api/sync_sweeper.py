@@ -28,7 +28,7 @@ def _dead_letter(row, message: str) -> None:
 
 
 def _sync_attendance_row(client, row: CadetAttendance) -> None:
-    resp = client.record_attendance(row)
+    resp = client.record_attendance(row, match_score=row.matchScore)
     row.syncedAt = resp.syncedAt
     row.error = None
     row.save()

@@ -1,4 +1,11 @@
-from peewee import CharField, DateTimeField, IntegerField, Model, SqliteDatabase
+from peewee import (
+    CharField,
+    DateTimeField,
+    FloatField,
+    IntegerField,
+    Model,
+    SqliteDatabase,
+)
 
 from src.config import DB_PATH
 
@@ -44,6 +51,7 @@ class CadetAttendance(Model):
     personId = CharField()
     attendanceTimeStamp = DateTimeField()
     sessionId = CharField()
+    matchScore = FloatField(null=True)  # FeatureHub confidence at first recognition
     syncedAt = CharField(null=True)
     error = CharField(null=True)
 
@@ -95,6 +103,10 @@ def _migrate_schema() -> None:
         cols = {row[1] for row in db.execute_sql("PRAGMA table_info(cadetattendance)")}
         if "error" not in cols:
             db.execute_sql("ALTER TABLE cadetattendance ADD COLUMN error TEXT")
+        if "matchScore" not in cols:
+            db.execute_sql(
+                'ALTER TABLE cadetattendance ADD COLUMN "matchScore" REAL'
+            )
         # Early deploys created syncedAt NOT NULL, but rows must start with
         # syncedAt NULL (unsynced) until the cloud confirms — rebuild the
         # table to relax the constraint, since SQLite can't ALTER it away.
@@ -110,8 +122,10 @@ def _migrate_schema() -> None:
                 db.create_tables([CadetAttendance], safe=True)
                 db.execute_sql(
                     'INSERT INTO cadetattendance '
-                    '(id, "personId", "attendanceTimeStamp", "sessionId", "syncedAt", error) '
-                    'SELECT id, "personId", "attendanceTimeStamp", "sessionId", "syncedAt", error '
+                    '(id, "personId", "attendanceTimeStamp", "sessionId", '
+                    '"matchScore", "syncedAt", error) '
+                    'SELECT id, "personId", "attendanceTimeStamp", "sessionId", '
+                    '"matchScore", "syncedAt", error '
                     'FROM cadetattendance_legacy'
                 )
                 db.execute_sql("DROP TABLE cadetattendance_legacy")

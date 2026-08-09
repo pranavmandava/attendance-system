@@ -63,6 +63,9 @@ else:
 INSPIREFACE_MODEL_NAME = "Pikachu"
 # Pikachu modelpack default; matches official sample threshold
 SIMILARITY_THRESHOLD = 0.55
+# Cap recognition confidence log spam (~30 FPS). First attendance hit always logs;
+# later matches for the same person log at most once per this interval.
+RECOGNITION_CONFIDENCE_LOG_INTERVAL_SECONDS = 2.0
 # Gundam_RK3588 targets NPU but currently segfaults on Axon — do not use yet
 # INSPIREFACE_MODEL_NAME = "Gundam_RK3588"
 
