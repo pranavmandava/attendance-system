@@ -35,7 +35,8 @@ log "Updating ${local_sha:0:7} -> ${remote_sha:0:7}"
 
 # Discard local tracked drift so the kiosk always tracks origin/main.
 # data/, .env, and .venv stay put (.gitignore / untracked).
-git checkout -B "$BRANCH" "origin/$BRANCH"
+# Use -f so generated files (e.g. old LAN Caddyfile) cannot block the update.
+git checkout -f -B "$BRANCH" "origin/$BRANCH"
 git reset --hard "origin/$BRANCH"
 git clean -fd --exclude=.env --exclude=data --exclude=.venv
 
@@ -51,7 +52,6 @@ UNIT_SRC="$ROOT/deploy/systemd"
 for unit in \
   axon-attendance-api.service \
   axon-attendance-ui.service \
-  axon-attendance-caddy.service \
   axon-attendance-update.service \
   axon-attendance-update.timer
 do
@@ -61,13 +61,9 @@ do
 done
 sudo systemctl daemon-reload
 
-# First-time Caddy install (no-op if already present / unit already enabled).
-if [[ -x "$ROOT/scripts/install-kiosk-caddy.sh" ]] && ! command -v caddy >/dev/null 2>&1; then
-  log "Caddy missing — installing"
-  "$ROOT/scripts/install-kiosk-caddy.sh"
-fi
-if [[ -f /etc/systemd/system/axon-attendance-caddy.service ]]; then
-  sudo systemctl enable axon-attendance-caddy.service >/dev/null
+# LAN Caddy is retired — HTTPS is via cloudflared tunnel. Keep it stopped if present.
+if systemctl list-unit-files axon-attendance-caddy.service >/dev/null 2>&1; then
+  sudo systemctl disable --now axon-attendance-caddy.service >/dev/null 2>&1 || true
 fi
 
 log "Restarting attendance services"
@@ -75,9 +71,5 @@ log "Restarting attendance services"
 sudo systemctl restart axon-attendance-api.service
 # UI Requires= API; restart UI explicitly so the Qt process reloads code.
 sudo systemctl restart axon-attendance-ui.service
-# Caddy regenerates Caddyfile with current LAN IP on each start.
-if systemctl list-unit-files axon-attendance-caddy.service >/dev/null 2>&1; then
-  sudo systemctl restart axon-attendance-caddy.service
-fi
 
 log "Update complete at $(git rev-parse --short HEAD)"
